@@ -1,0 +1,127 @@
+# Bypass Fast Go SDK
+
+The official, dependency-free Go client for every production Bypass Fast
+solver: Akamai, Kasada, Incapsula, and DataDome.
+
+```sh
+go get github.com/bypassfast/bypassfast-go
+```
+
+The module supports Go 1.22 and newer.
+
+## Quick start
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+
+	bypassfast "github.com/bypassfast/bypassfast-go"
+)
+
+func main() {
+	client, err := bypassfast.NewClient(os.Getenv("BYPASS_FAST_API_KEY"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	result, err := client.Kasada.Sensor(context.Background(), &bypassfast.KasadaSensorRequest{
+		Script:    "<raw p.js body>",
+		UserAgent: "<target-session Chrome user agent>",
+		URL:       "https://www.example.com/checkout",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Submit result.Payload and every result.Headers entry to Kasada, then
+	// use result.UserAgent verbatim for the protected request.
+	_ = result
+}
+```
+
+Create one client and reuse it across goroutines. Each call accepts a context,
+so deadlines and cancellation flow through to the API.
+
+## Solver methods
+
+| Protection | SDK method | Artifact |
+| --- | --- | --- |
+| Akamai Bot Manager | `client.Akamai.Sensor` | `sensor_data`, session, exact UA/language |
+| Akamai SBSD | `client.Akamai.SBSD` | encrypted SBSD body |
+| Akamai Sec-CPT | `client.Akamai.CPT` | ten proof answers |
+| Kasada sensor | `client.Kasada.Sensor` | encrypted payload and `x-kpsdk-*` headers |
+| Kasada CD | `client.Kasada.CD` | `x-kpsdk-cd` proof body |
+| Incapsula Reese84 | `client.Incapsula.Reese84` | sensor submission body and device session |
+| Incapsula UTMVC | `client.Incapsula.UTMVC` | `___utmvc` cookie and submission path |
+| DataDome | `client.DataDome.Solve` | verified cookie jar and exact UA |
+
+`client.Balance` reads prepaid USD balance. `client.Solve` is a typed escape
+hatch for newly added request fields, but the service methods are preferred.
+
+### Akamai script handling
+
+Pass raw JavaScript bytes in `AkamaiSensorRequest.Script` and
+`AkamaiSBSDRequest.Script`; the SDK applies the base64 encoding required by the
+API. After a sensor script succeeds, the client remembers only its SHA-256 and
+uses `script_id` for later fresh sessions. If the server-side entry expired, it
+automatically resends the supplied script once. Persist the returned
+`ScriptID` if a new process should try the compact form immediately. On a new
+process, set both `ScriptID` and `Script`: the ID is tried first and the raw
+bytes are retained only for cache-miss fallback. `AkamaiScriptID` computes the
+ID locally when needed.
+
+### Incapsula script handling
+
+The client remembers the SHA-256 associated with each successful mode and full
+script URL. Repeated identical scripts use the URL-only cache path. Changed
+bytes at the same URL are sent in full, and remote cache misses fall back to
+the supplied script automatically.
+
+## Errors and retries
+
+```go
+_, err := client.DataDome.Solve(ctx, request)
+if err != nil {
+	var apiErr *bypassfast.APIError
+	if errors.As(err, &apiErr) {
+		log.Printf("solve failed: code=%s status=%d request_id=%s",
+			apiErr.Code, apiErr.Response.StatusCode, apiErr.Response.RequestID)
+	}
+}
+```
+
+The default policy retries up to twice with jittered exponential backoff and
+honors `Retry-After`. It only retries explicit non-2xx API responses known to
+be non-billable and transient. It never retries a network/transport failure:
+the connection may have failed after a non-idempotent solve completed. Configure
+this behavior with `WithRetryPolicy`.
+
+Every successful result has a `Response` field containing status, request ID,
+edge version, `Server-Timing`, and total attempt count. `APIError` provides the
+same metadata plus the stable machine code. Errors intentionally exclude
+response bodies because solver artifacts, cookies, and tokens are bearer
+credentials.
+
+## Transport behavior
+
+- JSON requests of at least 1 KiB are gzip-compressed when compression saves
+  bytes. Configure or disable this with `WithCompressionThreshold`.
+- Decoded requests are rejected locally above the API's 1 MiB limit.
+- Responses are bounded to 4 MiB and gzip-decoded independent of the supplied
+  HTTP transport.
+- Redirects are never followed, preventing `X-API-Key` from crossing origins.
+- The default HTTP timeout is 65 seconds. A custom `*http.Client` can be passed
+  with `WithHTTPClient`.
+- Custom non-loopback base URLs must use HTTPS.
+
+Never log request objects or successful solver responses. They can contain API
+keys, proxy credentials, device sessions, target cookies, and challenge tokens.
+
+## Releasing
+
+Releases are published from the SDK's public mirror with standard semantic
+version tags such as `v0.1.0`. Keep the tag and `Version` constant aligned.
