@@ -1,5 +1,7 @@
 # Bypass Fast Go SDK
 
+[![Go](https://github.com/bypassfast/bypassfast-go/actions/workflows/test.yml/badge.svg)](https://github.com/bypassfast/bypassfast-go/actions/workflows/test.yml)
+
 The official, dependency-free Go client for every production Bypass Fast
 solver: Akamai, Kasada, Incapsula, and DataDome.
 
