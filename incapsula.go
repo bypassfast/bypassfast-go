@@ -23,6 +23,15 @@ type IncapsulaReese84Request struct {
 	OldToken       string
 	Session        string
 	Headers        map[string]string
+	// DocumentHTML is the challenged page body from which Script was
+	// discovered. Send it for dynamic Reese84 pages: some variants fingerprint
+	// every script element in this document, including tenant static resources
+	// that do not appear in the loader itself.
+	DocumentHTML string
+	// DocumentScriptSourceGroups is the pre-extracted advanced form of
+	// DocumentHTML. Most callers should set DocumentHTML and let the API parse
+	// the browser collector order.
+	DocumentScriptSourceGroups [][]string
 }
 
 // IncapsulaUTMVCRequest generates the ___utmvc cookie workflow.
@@ -54,18 +63,20 @@ type IncapsulaResponse struct {
 }
 
 type incapsulaWire struct {
-	Mode           string            `json:"mode"`
-	Script         string            `json:"script,omitempty"`
-	UserAgent      string            `json:"ua"`
-	ScriptURL      string            `json:"script_url"`
-	URL            string            `json:"url"`
-	AcceptLanguage string            `json:"accept_language,omitempty"`
-	IP             string            `json:"ip,omitempty"`
-	POW            string            `json:"pow,omitempty"`
-	OldToken       string            `json:"old_token,omitempty"`
-	Session        string            `json:"session,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	SessionIDs     []string          `json:"session_ids,omitempty"`
+	Mode                       string            `json:"mode"`
+	Script                     string            `json:"script,omitempty"`
+	UserAgent                  string            `json:"ua"`
+	ScriptURL                  string            `json:"script_url"`
+	URL                        string            `json:"url"`
+	AcceptLanguage             string            `json:"accept_language,omitempty"`
+	IP                         string            `json:"ip,omitempty"`
+	POW                        string            `json:"pow,omitempty"`
+	OldToken                   string            `json:"old_token,omitempty"`
+	Session                    string            `json:"session,omitempty"`
+	Headers                    map[string]string `json:"headers,omitempty"`
+	SessionIDs                 []string          `json:"session_ids,omitempty"`
+	DocumentHTML               string            `json:"document_html,omitempty"`
+	DocumentScriptSourceGroups [][]string        `json:"document_script_source_groups,omitempty"`
 }
 
 // Reese84 generates an Incapsula Reese84 sensor payload.
@@ -74,19 +85,32 @@ func (s *IncapsulaService) Reese84(ctx context.Context, request *IncapsulaReese8
 		return nil, &ValidationError{Field: "request", Message: "must not be nil"}
 	}
 	wire := incapsulaWire{
-		Mode:           "reese84",
-		Script:         request.Script,
-		UserAgent:      request.UserAgent,
-		ScriptURL:      request.ScriptURL,
-		URL:            request.URL,
-		AcceptLanguage: request.AcceptLanguage,
-		IP:             request.IP,
-		POW:            request.POW,
-		OldToken:       request.OldToken,
-		Session:        request.Session,
-		Headers:        request.Headers,
+		Mode:                       "reese84",
+		Script:                     request.Script,
+		UserAgent:                  request.UserAgent,
+		ScriptURL:                  request.ScriptURL,
+		URL:                        request.URL,
+		AcceptLanguage:             request.AcceptLanguage,
+		IP:                         request.IP,
+		POW:                        request.POW,
+		OldToken:                   request.OldToken,
+		Session:                    request.Session,
+		Headers:                    request.Headers,
+		DocumentHTML:               request.DocumentHTML,
+		DocumentScriptSourceGroups: cloneIncapsulaStringGroups(request.DocumentScriptSourceGroups),
 	}
 	return s.solve(ctx, wire)
+}
+
+func cloneIncapsulaStringGroups(groups [][]string) [][]string {
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make([][]string, len(groups))
+	for index, group := range groups {
+		out[index] = append([]string(nil), group...)
+	}
+	return out
 }
 
 // UTMVC generates the ___utmvc cookie and submission path.

@@ -117,8 +117,10 @@ func TestIncapsulaScriptReuseAndFallback(t *testing.T) {
 	var scripts []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Mode   string `json:"mode"`
-			Script string `json:"script"`
+			Mode                       string     `json:"mode"`
+			Script                     string     `json:"script"`
+			DocumentHTML               string     `json:"document_html"`
+			DocumentScriptSourceGroups [][]string `json:"document_script_source_groups"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
@@ -130,6 +132,9 @@ func TestIncapsulaScriptReuseAndFallback(t *testing.T) {
 		if body.Mode != "reese84" {
 			t.Errorf("mode = %q", body.Mode)
 		}
+		if body.DocumentHTML == "" || len(body.DocumentScriptSourceGroups) != 1 || len(body.DocumentScriptSourceGroups[0]) != 1 {
+			t.Errorf("document context was not preserved")
+		}
 		if call == 2 {
 			w.WriteHeader(http.StatusConflict)
 			_, _ = io.WriteString(w, `{"error":"script_cache_miss"}`)
@@ -139,7 +144,11 @@ func TestIncapsulaScriptReuseAndFallback(t *testing.T) {
 	}))
 	defer server.Close()
 	client := newTestClient(t, server, WithCompressionThreshold(-1))
-	request := &IncapsulaReese84Request{Script: "raw script", ScriptURL: "https://example.com/loader", URL: "https://example.com", UserAgent: "ua"}
+	request := &IncapsulaReese84Request{
+		Script: "raw script", ScriptURL: "https://example.com/loader", URL: "https://example.com", UserAgent: "ua",
+		DocumentHTML:               `<script async src="/static/build"></script>`,
+		DocumentScriptSourceGroups: [][]string{{"https://example.com/static/build"}},
+	}
 	if _, err := client.Incapsula.Reese84(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
