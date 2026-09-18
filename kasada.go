@@ -22,6 +22,7 @@ type KasadaSensorRequest struct {
 	AncestorOrigins    []string          `json:"ancestor_origins,omitempty"`
 	RuntimeOverrides   map[string]any    `json:"runtime_overrides,omitempty"`
 	AcceptLanguage     string            `json:"accept_language,omitempty"`
+	Timezone           string            `json:"timezone,omitempty"`
 	IP                 string            `json:"ip,omitempty"`
 	ChallengeToken     string            `json:"challenge_token,omitempty"`
 	ScriptName         string            `json:"script_name,omitempty"`
