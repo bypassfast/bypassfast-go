@@ -94,7 +94,7 @@ func TestAPIErrorSupportsBothEnvelopes(t *testing.T) {
 			defer server.Close()
 			client := newTestClient(t, server)
 
-			_, err := client.DataDome.Solve(context.Background(), &DataDomeRequest{Target: "https://example.com"})
+			_, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
 			var apiErr *APIError
 			if !errors.As(err, &apiErr) {
 				t.Fatalf("error = %T %v", err, err)
@@ -118,7 +118,7 @@ func TestMalformedResponseErrorsDoNotExposeBodies(t *testing.T) {
 	defer server.Close()
 	client := newTestClient(t, server)
 
-	_, err := client.DataDome.Solve(context.Background(), &DataDomeRequest{Target: "https://example.com"})
+	_, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
 	var responseErr *ResponseError
 	if !errors.As(err, &responseErr) || responseErr.Response.RequestID != "req-malformed" {
 		t.Fatalf("error = %T %v", err, err)
@@ -192,7 +192,7 @@ func TestTransportErrorsAreNotRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.DataDome.Solve(context.Background(), &DataDomeRequest{Target: "https://example.com"})
+	_, err = client.Kasada.CD(context.Background(), &KasadaCDRequest{})
 	var requestErr *RequestError
 	if !errors.As(err, &requestErr) || calls.Load() != 1 {
 		t.Fatalf("error/calls = %T %v/%d", err, err, calls.Load())
@@ -265,7 +265,7 @@ func TestRedirectsCannotForwardAPIKey(t *testing.T) {
 	defer origin.Close()
 	client := newTestClient(t, origin)
 
-	_, err := client.DataDome.Solve(context.Background(), &DataDomeRequest{Target: "https://example.com"})
+	_, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Response.StatusCode != http.StatusTemporaryRedirect {
 		t.Fatalf("error = %T %v", err, err)

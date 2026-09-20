@@ -43,7 +43,6 @@ const (
 	SolverAkamai    Solver = "akamai"
 	SolverKasada    Solver = "kasada"
 	SolverIncapsula Solver = "incapsula"
-	SolverDataDome  Solver = "datadome"
 )
 
 // RetryPolicy controls retries after the API has returned an explicitly
@@ -152,7 +151,6 @@ type Client struct {
 	Akamai    *AkamaiService
 	Kasada    *KasadaService
 	Incapsula *IncapsulaService
-	DataDome  *DataDomeService
 }
 
 // NewClient constructs a client using an API key. The default HTTP timeout is
@@ -210,7 +208,6 @@ func NewClient(apiKey string, options ...Option) (*Client, error) {
 	c.Akamai = &AkamaiService{client: c}
 	c.Kasada = &KasadaService{client: c}
 	c.Incapsula = &IncapsulaService{client: c}
-	c.DataDome = &DataDomeService{client: c}
 	return c, nil
 }
 
@@ -242,7 +239,7 @@ func isLoopbackHost(host string) bool {
 // advanced fields not yet represented by this SDK.
 func (c *Client) Solve(ctx context.Context, solver Solver, request, response any) (ResponseMeta, error) {
 	if !solver.valid() {
-		return ResponseMeta{}, &ValidationError{Field: "solver", Message: "must be akamai, kasada, incapsula, or datadome"}
+		return ResponseMeta{}, &ValidationError{Field: "solver", Message: "must be akamai, kasada, or incapsula"}
 	}
 	if response == nil || reflect.ValueOf(response).Kind() != reflect.Pointer || reflect.ValueOf(response).IsNil() {
 		return ResponseMeta{}, &ValidationError{Field: "response", Message: "must be a non-nil pointer"}
@@ -252,7 +249,7 @@ func (c *Client) Solve(ctx context.Context, solver Solver, request, response any
 
 func (s Solver) valid() bool {
 	switch s {
-	case SolverAkamai, SolverKasada, SolverIncapsula, SolverDataDome:
+	case SolverAkamai, SolverKasada, SolverIncapsula:
 		return true
 	default:
 		return false

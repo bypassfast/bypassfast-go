@@ -243,24 +243,6 @@ func TestTypedModesSendCanonicalContracts(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:     "datadome",
-			path:     "/v1/solve/datadome",
-			wantMode: "",
-			response: `{"payload":"cookie","verified":true,"cookies":[{"name":"datadome","value":"v"}]}`,
-			invoke: func(ctx context.Context, client *Client) error {
-				result, err := client.DataDome.Solve(ctx, &DataDomeRequest{Target: "https://example.com", Profile: 2})
-				if err == nil && (!result.Verified || len(result.Cookies) != 1) {
-					return &ValidationError{Message: "response did not decode"}
-				}
-				return err
-			},
-			assertBody: func(t *testing.T, body map[string]any) {
-				if body["target"] != "https://example.com" || body["profile"] != float64(2) {
-					t.Fatalf("body = %#v", body)
-				}
-			},
-		},
 	}
 
 	for _, test := range tests {

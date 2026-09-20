@@ -3,7 +3,7 @@
 [![Go](https://github.com/bypassfast/bypassfast-go/actions/workflows/test.yml/badge.svg)](https://github.com/bypassfast/bypassfast-go/actions/workflows/test.yml)
 
 The official, dependency-free Go client for every production Bypass Fast
-solver: Akamai, Kasada, Incapsula, and DataDome.
+solver: Akamai, Kasada, and Incapsula.
 
 ```sh
 go get github.com/bypassfast/bypassfast-go
@@ -59,7 +59,6 @@ so deadlines and cancellation flow through to the API.
 | Kasada CD | `client.Kasada.CD` | `x-kpsdk-cd` proof body |
 | Incapsula Reese84 | `client.Incapsula.Reese84` | sensor submission body and device session |
 | Incapsula UTMVC | `client.Incapsula.UTMVC` | `___utmvc` cookie and submission path |
-| DataDome | `client.DataDome.Solve` | verified cookie jar and exact UA |
 
 `client.Balance` reads prepaid USD balance. `client.Solve` is a typed escape
 hatch for newly added request fields, but the service methods are preferred.
@@ -86,7 +85,7 @@ the supplied script automatically.
 ## Errors and retries
 
 ```go
-_, err := client.DataDome.Solve(ctx, request)
+_, err := client.Kasada.CD(ctx, request)
 if err != nil {
 	var apiErr *bypassfast.APIError
 	if errors.As(err, &apiErr) {
