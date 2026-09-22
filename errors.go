@@ -90,10 +90,12 @@ func (e *ResponseError) Unwrap() error {
 // APIError is a non-2xx response from Bypass Fast. Code is the stable machine
 // contract from either "error" or Akamai's legacy "error_code" field.
 type APIError struct {
-	Response   ResponseMeta
-	Code       string
-	Message    string
-	Stage      string
+	Response ResponseMeta
+	Code     string
+	Message  string
+	Stage    string
+	// RetryAfter is the server's retry hint: the response's retry_after_ms
+	// field when present, otherwise its Retry-After header. Zero means none.
 	RetryAfter time.Duration
 }
 
@@ -145,6 +147,8 @@ func decodeAPIError(payload []byte) *APIError {
 		ErrorCode string `json:"error_code"`
 		Message   string `json:"message"`
 		Stage     string `json:"stage"`
+		// Kept raw so a malformed hint cannot discard the error code.
+		RetryAfterMS json.RawMessage `json:"retry_after_ms"`
 	}
 	if json.Unmarshal(payload, &wire) != nil {
 		return &APIError{Code: "http_error"}
@@ -156,5 +160,18 @@ func decodeAPIError(payload []byte) *APIError {
 	if code == "" {
 		code = "http_error"
 	}
-	return &APIError{Code: code, Message: wire.Message, Stage: wire.Stage}
+	return &APIError{Code: code, Message: wire.Message, Stage: wire.Stage, RetryAfter: parseRetryAfterMS(wire.RetryAfterMS)}
+}
+
+// parseRetryAfterMS converts the optional retry_after_ms body field. Values
+// that are absent, not a JSON number, or not positive yield zero.
+func parseRetryAfterMS(raw json.RawMessage) time.Duration {
+	var ms float64
+	if len(raw) == 0 || json.Unmarshal(raw, &ms) != nil || ms <= 0 {
+		return 0
+	}
+	if ms >= float64(maxRetryDelay/time.Millisecond) {
+		return maxRetryDelay
+	}
+	return time.Duration(ms * float64(time.Millisecond))
 }

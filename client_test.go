@@ -323,6 +323,12 @@ func TestClientValidation(t *testing.T) {
 	if _, err := NewClient("key", WithRetryPolicy(RetryPolicy{MaxRetries: 1, BaseDelay: time.Second})); err == nil {
 		t.Fatal("uncapped positive retry delay accepted")
 	}
+	if _, err := NewClient("key", WithSolverBusyRetryBudget(-time.Second)); err == nil {
+		t.Fatal("negative solver_busy retry budget accepted")
+	}
+	if _, err := NewClient("key", WithSolverBusyRetryBudget(2*time.Hour)); err == nil {
+		t.Fatal("oversized solver_busy retry budget accepted")
+	}
 	client, err := NewClient("key")
 	if err != nil {
 		t.Fatal(err)
@@ -358,6 +364,265 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 	if got := parseRetryAfter("9223372036854775807", now); got != maxRetryDelay {
 		t.Fatalf("large delay = %s", got)
+	}
+}
+
+func TestSolverBusyDelayBounds(t *testing.T) {
+	low := func(time.Duration) time.Duration { return 0 }
+	high := func(window time.Duration) time.Duration { return window }
+	for _, test := range []struct {
+		name       string
+		retry      int
+		retryAfter time.Duration
+		min, max   time.Duration
+	}{
+		{name: "no hint uses the one-second floor", retry: 1, min: time.Second, max: 2 * time.Second},
+		{name: "window doubles", retry: 2, retryAfter: time.Second, min: time.Second, max: 4 * time.Second},
+		{name: "third retry", retry: 3, retryAfter: time.Second, min: time.Second, max: 8 * time.Second},
+		{name: "window caps at ten seconds", retry: 4, retryAfter: time.Second, min: time.Second, max: 10 * time.Second},
+		{name: "cap holds for long streaks", retry: 60, retryAfter: time.Second, min: time.Second, max: 10 * time.Second},
+		{name: "millisecond hint is the floor", retry: 1, retryAfter: 250 * time.Millisecond, min: 250 * time.Millisecond, max: 500 * time.Millisecond},
+		{name: "small hint still reaches the cap", retry: 8, retryAfter: 250 * time.Millisecond, min: 250 * time.Millisecond, max: 10 * time.Second},
+		{name: "hint above the cap keeps a jitter window", retry: 3, retryAfter: 20 * time.Second, min: 20 * time.Second, max: 40 * time.Second},
+		{name: "safety cap", retry: 1, retryAfter: 2 * time.Hour, min: maxRetryDelay, max: maxRetryDelay},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := solverBusyDelay(test.retry, test.retryAfter, low); got != test.min {
+				t.Fatalf("minimum = %s, want %s", got, test.min)
+			}
+			if got := solverBusyDelay(test.retry, test.retryAfter, high); got != test.max {
+				t.Fatalf("maximum = %s, want %s", got, test.max)
+			}
+			for i := 0; i < 200; i++ {
+				if got := solverBusyDelay(test.retry, test.retryAfter, fullJitter); got < test.min || got > test.max {
+					t.Fatalf("jittered delay %s outside [%s, %s]", got, test.min, test.max)
+				}
+			}
+		})
+	}
+}
+
+func TestSolverBusyRetriesDoNotConsumeMaxRetries(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) <= 3 {
+			// The header alone would force a one-second wait; the body hint
+			// is authoritative when present.
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":"solver_busy","retry_after_ms":1}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"payload":"ok","duration_ms":1}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithRetryPolicy(RetryPolicy{MaxRetries: 1}))
+
+	started := time.Now()
+	result, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 4 || result.Response.Attempts != 4 {
+		t.Fatalf("calls/attempts = %d/%d", calls.Load(), result.Response.Attempts)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("retries took %s; retry_after_ms was not preferred over Retry-After", elapsed)
+	}
+}
+
+func TestSolverBusyRetryBudgetExhaustion(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":"solver_busy","retry_after_ms":5}`)
+	}))
+	defer server.Close()
+	const budget = 200 * time.Millisecond
+	client := newTestClient(t, server,
+		WithRetryPolicy(RetryPolicy{MaxRetries: 1}),
+		WithSolverBusyRetryBudget(budget))
+
+	started := time.Now()
+	_, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
+	elapsed := time.Since(started)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "solver_busy" {
+		t.Fatalf("error = %T %v", err, err)
+	}
+	// The first two waits total at most 30 ms, so a 200 ms budget always
+	// allows more attempts than MaxRetries would.
+	if calls.Load() < 3 || apiErr.Response.Attempts != int(calls.Load()) {
+		t.Fatalf("calls/attempts = %d/%d", calls.Load(), apiErr.Response.Attempts)
+	}
+	if apiErr.RetryAfter != 5*time.Millisecond {
+		t.Fatalf("retry after = %s", apiErr.RetryAfter)
+	}
+	// No retry starts after the budget; allow for the last request itself.
+	if elapsed > budget+time.Second {
+		t.Fatalf("elapsed %s exceeded the %s budget", elapsed, budget)
+	}
+}
+
+func TestSolverBusyRetryStopsBeforeContextDeadline(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":"solver_busy","retry_after_ms":2000}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithRetryPolicy(RetryPolicy{MaxRetries: 1}))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	// A retry that cannot start before the deadline is not waited for: the
+	// caller gets the capacity error rather than a context timeout.
+	_, err := client.Kasada.CD(ctx, &KasadaCDRequest{})
+	if !IsErrorCode(err, "solver_busy") || errors.Is(err, context.DeadlineExceeded) || calls.Load() != 1 {
+		t.Fatalf("error/calls = %v/%d", err, calls.Load())
+	}
+	if ctx.Err() != nil {
+		t.Fatal("client waited for the context deadline")
+	}
+}
+
+func TestSolverBusyRetryWaitHonorsCancellation(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":"solver_busy","retry_after_ms":5000}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithRetryPolicy(RetryPolicy{MaxRetries: 1}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(50*time.Millisecond, cancel)
+	defer timer.Stop()
+
+	started := time.Now()
+	_, err := client.Kasada.CD(ctx, &KasadaCDRequest{})
+	if !errors.Is(err, context.Canceled) || calls.Load() != 1 {
+		t.Fatalf("error/calls = %v/%d", err, calls.Load())
+	}
+	if elapsed := time.Since(started); elapsed >= 5*time.Second {
+		t.Fatalf("cancellation ignored for %s", elapsed)
+	}
+}
+
+func TestSolverBusyRetryCanBeDisabled(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		options []Option
+	}{
+		{name: "zero budget", options: []Option{WithRetryPolicy(RetryPolicy{MaxRetries: 2}), WithSolverBusyRetryBudget(0)}},
+		{name: "zero max retries", options: []Option{WithRetryPolicy(RetryPolicy{})}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = io.WriteString(w, `{"error":"solver_busy","retry_after_ms":1}`)
+			}))
+			defer server.Close()
+			client := newTestClient(t, server, test.options...)
+			_, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
+			if !IsErrorCode(err, "solver_busy") || calls.Load() != 1 {
+				t.Fatalf("error/calls = %v/%d", err, calls.Load())
+			}
+		})
+	}
+}
+
+func TestQuotaExceededIsNotRetriedLikeSolverBusy(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":"quota_exceeded","retry_after_ms":1}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithRetryPolicy(RetryPolicy{MaxRetries: 2}), WithSolverBusyRetryBudget(time.Minute))
+
+	_, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
+	if !IsErrorCode(err, "quota_exceeded") || calls.Load() != 1 {
+		t.Fatalf("error/calls = %v/%d", err, calls.Load())
+	}
+}
+
+func TestInternalErrorAfterSolverBusyIsRetriedOnce(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":"solver_busy","retry_after_ms":1}`)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"internal_error"}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithRetryPolicy(RetryPolicy{MaxRetries: 2}))
+
+	_, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
+	if !IsErrorCode(err, "internal_error") || calls.Load() != 3 {
+		t.Fatalf("error/calls = %v/%d", err, calls.Load())
+	}
+}
+
+func TestRetryAfterMSParsing(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want time.Duration
+	}{
+		{name: "integer", body: `{"error":"solver_busy","retry_after_ms":1500}`, want: 1500 * time.Millisecond},
+		{name: "fractional", body: `{"error":"solver_busy","retry_after_ms":2.5}`, want: 2500 * time.Microsecond},
+		{name: "absent", body: `{"error":"solver_busy"}`},
+		{name: "null", body: `{"error":"solver_busy","retry_after_ms":null}`},
+		{name: "zero", body: `{"error":"solver_busy","retry_after_ms":0}`},
+		{name: "negative", body: `{"error":"solver_busy","retry_after_ms":-5}`},
+		{name: "string keeps the code", body: `{"error":"solver_busy","retry_after_ms":"1500"}`},
+		{name: "object keeps the code", body: `{"error":"solver_busy","retry_after_ms":{}}`},
+		{name: "overflowing number keeps the code", body: `{"error":"solver_busy","retry_after_ms":1e400}`},
+		{name: "capped", body: `{"error":"solver_busy","retry_after_ms":1e12}`, want: maxRetryDelay},
+		{name: "akamai envelope", body: `{"success":false,"error_code":"solver_busy","retry_after_ms":750}`, want: 750 * time.Millisecond},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			apiErr := decodeAPIError([]byte(test.body))
+			if apiErr.Code != "solver_busy" || apiErr.RetryAfter != test.want {
+				t.Fatalf("code/retry after = %q/%s, want solver_busy/%s", apiErr.Code, apiErr.RetryAfter, test.want)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		body string
+		want time.Duration
+	}{
+		{name: "header only", body: `{"error":"solver_busy"}`, want: 2 * time.Second},
+		{name: "body wins", body: `{"error":"solver_busy","retry_after_ms":300}`, want: 300 * time.Millisecond},
+		{name: "invalid body falls back to header", body: `{"error":"solver_busy","retry_after_ms":"soon"}`, want: 2 * time.Second},
+	} {
+		t.Run("response "+test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Retry-After", "2")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			client := newTestClient(t, server)
+			_, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.Code != "solver_busy" || apiErr.RetryAfter != test.want {
+				t.Fatalf("error = %#v, want retry after %s", apiErr, test.want)
+			}
+		})
 	}
 }
 

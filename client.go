@@ -26,7 +26,7 @@ import (
 
 const (
 	// Version is the semantic version of this SDK.
-	Version = "0.1.0"
+	Version = "0.2.0"
 
 	defaultBaseURL              = "https://api.bypass.fast"
 	defaultCompressionThreshold = 1024
@@ -34,6 +34,13 @@ const (
 	maxResponseBytes            = 4 * 1024 * 1024
 	maxConfiguredRetries        = 10
 	maxRetryDelay               = time.Hour
+
+	defaultSolverBusyRetryBudget = 45 * time.Second
+	// solverBusyRetryFloor is the minimum wait when a solver_busy response
+	// carries no Retry-After or retry_after_ms hint.
+	solverBusyRetryFloor = time.Second
+	// solverBusyRetryMaxDelay caps the jitter window of one solver_busy wait.
+	solverBusyRetryMaxDelay = 10 * time.Second
 )
 
 // Solver identifies a solver accepted by the unified solve endpoint.
@@ -49,7 +56,10 @@ const (
 // non-successful response. Transport errors are never retried because the SDK
 // cannot know whether the server completed a non-idempotent solve.
 type RetryPolicy struct {
-	// MaxRetries is the number of retries after the initial attempt.
+	// MaxRetries is the number of retries after the initial attempt. A
+	// solver_busy response is instead retried within the solver_busy retry
+	// budget (see WithSolverBusyRetryBudget) and does not count against
+	// MaxRetries. Zero disables every automatic retry, solver_busy included.
 	MaxRetries int
 	// BaseDelay is the initial exponential-backoff ceiling.
 	BaseDelay time.Duration
@@ -59,11 +69,12 @@ type RetryPolicy struct {
 }
 
 type config struct {
-	baseURL              string
-	httpClient           *http.Client
-	retryPolicy          RetryPolicy
-	compressionThreshold int
-	userAgent            string
+	baseURL               string
+	httpClient            *http.Client
+	retryPolicy           RetryPolicy
+	solverBusyRetryBudget time.Duration
+	compressionThreshold  int
+	userAgent             string
 }
 
 // Option configures a Client.
@@ -115,6 +126,21 @@ func WithRetryPolicy(policy RetryPolicy) Option {
 	}
 }
 
+// WithSolverBusyRetryBudget bounds how long the client keeps retrying 429
+// solver_busy responses, measured from the start of the call. The default is
+// 45 seconds. Each wait honors the server's Retry-After or retry_after_ms hint
+// as a floor and adds exponentially growing jitter, and no retry starts after
+// the budget or the context deadline. Zero disables solver_busy retries.
+func WithSolverBusyRetryBudget(budget time.Duration) Option {
+	return func(cfg *config) error {
+		if budget < 0 || budget > maxRetryDelay {
+			return fmt.Errorf("bypassfast: solver_busy retry budget must be between 0 and %s", maxRetryDelay)
+		}
+		cfg.solverBusyRetryBudget = budget
+		return nil
+	}
+}
+
 // WithCompressionThreshold controls automatic gzip request compression. A
 // negative value disables compression; zero compresses every non-empty body.
 func WithCompressionThreshold(bytes int) Option {
@@ -126,7 +152,7 @@ func WithCompressionThreshold(bytes int) Option {
 
 // WithUserAgent adds an application identifier after the SDK user agent.
 // For example, "checkout-service/2.4.0" becomes
-// "bypassfast-go/0.1.0 checkout-service/2.4.0".
+// "bypassfast-go/0.2.0 checkout-service/2.4.0".
 func WithUserAgent(application string) Option {
 	return func(cfg *config) error {
 		application = strings.TrimSpace(application)
@@ -140,13 +166,14 @@ func WithUserAgent(application string) Option {
 
 // Client is a concurrency-safe Bypass Fast API client.
 type Client struct {
-	apiKey               string
-	baseURL              string
-	httpClient           *http.Client
-	retryPolicy          RetryPolicy
-	compressionThreshold int
-	userAgent            string
-	scripts              *scriptMemory
+	apiKey                string
+	baseURL               string
+	httpClient            *http.Client
+	retryPolicy           RetryPolicy
+	solverBusyRetryBudget time.Duration
+	compressionThreshold  int
+	userAgent             string
+	scripts               *scriptMemory
 
 	Akamai    *AkamaiService
 	Kasada    *KasadaService
@@ -173,8 +200,9 @@ func NewClient(apiKey string, options ...Option) (*Client, error) {
 			BaseDelay:  500 * time.Millisecond,
 			MaxDelay:   8 * time.Second,
 		},
-		compressionThreshold: defaultCompressionThreshold,
-		userAgent:            "bypassfast-go/" + Version,
+		solverBusyRetryBudget: defaultSolverBusyRetryBudget,
+		compressionThreshold:  defaultCompressionThreshold,
+		userAgent:             "bypassfast-go/" + Version,
 	}
 	for _, option := range options {
 		if option == nil {
@@ -197,13 +225,14 @@ func NewClient(apiKey string, options ...Option) (*Client, error) {
 		return http.ErrUseLastResponse
 	}
 	c := &Client{
-		apiKey:               apiKey,
-		baseURL:              baseURL,
-		httpClient:           &httpClient,
-		retryPolicy:          cfg.retryPolicy,
-		compressionThreshold: cfg.compressionThreshold,
-		userAgent:            cfg.userAgent,
-		scripts:              newScriptMemory(256),
+		apiKey:                apiKey,
+		baseURL:               baseURL,
+		httpClient:            &httpClient,
+		retryPolicy:           cfg.retryPolicy,
+		solverBusyRetryBudget: cfg.solverBusyRetryBudget,
+		compressionThreshold:  cfg.compressionThreshold,
+		userAgent:             cfg.userAgent,
+		scripts:               newScriptMemory(256),
 	}
 	c.Akamai = &AkamaiService{client: c}
 	c.Kasada = &KasadaService{client: c}
@@ -302,8 +331,10 @@ func (c *Client) encodeRequest(payload []byte) ([]byte, string, error) {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte, contentEncoding string, response any) (ResponseMeta, error) {
-	for attempt := 0; ; attempt++ {
-		meta, payload, err := c.attempt(ctx, method, path, body, contentEncoding, attempt+1)
+	started := time.Now()
+	retries, busyRetries := 0, 0
+	for attempt := 1; ; attempt++ {
+		meta, payload, err := c.attempt(ctx, method, path, body, contentEncoding, attempt)
 		if err == nil {
 			if response == nil || len(payload) == 0 {
 				return meta, nil
@@ -315,15 +346,31 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, conte
 		}
 
 		var apiErr *APIError
-		if !errors.As(err, &apiErr) || attempt >= c.retryPolicy.MaxRetries || !apiErr.Retryable() {
+		if !errors.As(err, &apiErr) || !apiErr.Retryable() {
 			return meta, err
 		}
-		// Internal errors are documented for one retry; avoid turning a broken
-		// solver release into three identical expensive attempts.
-		if attempt >= 1 && (apiErr.Code == "internal" || apiErr.Code == "internal_error") {
-			return meta, err
+		var delay time.Duration
+		if apiErr.Code == "solver_busy" {
+			// A task at its admission limit frees slots as solves finish or
+			// the fleet scales, so capacity rejects are retried against a time
+			// budget; a short synchronized burst would only deepen the overload.
+			busyRetries++
+			delay = solverBusyDelay(busyRetries, apiErr.RetryAfter, fullJitter)
+			if !c.solverBusyRetryFits(ctx, started, delay) {
+				return meta, err
+			}
+		} else {
+			if retries >= c.retryPolicy.MaxRetries {
+				return meta, err
+			}
+			// Internal errors are documented for one retry; avoid turning a broken
+			// solver release into three identical expensive attempts.
+			if retries >= 1 && (apiErr.Code == "internal" || apiErr.Code == "internal_error") {
+				return meta, err
+			}
+			retries++
+			delay = c.retryDelay(retries, apiErr.RetryAfter)
 		}
-		delay := c.retryDelay(attempt+1, apiErr.RetryAfter)
 		if delay <= 0 {
 			continue
 		}
@@ -382,7 +429,11 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 
 	apiErr := decodeAPIError(payload)
 	apiErr.Response = meta
-	apiErr.RetryAfter = parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	// retry_after_ms is the millisecond-precision form of Retry-After; older
+	// servers send only the header.
+	if apiErr.RetryAfter <= 0 {
+		apiErr.RetryAfter = parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	}
 	return meta, nil, apiErr
 }
 
@@ -430,6 +481,42 @@ func (c *Client) retryDelay(attempt int, retryAfter time.Duration) time.Duration
 		return retryAfter
 	}
 	return base
+}
+
+// solverBusyDelay returns the wait before a call's nth solver_busy retry. The
+// server's hint is a floor that is never undercut; above it, a full
+// jitter window doubles per retry up to solverBusyRetryMaxDelay (or twice the
+// floor, when that is larger) so clients rejected together do not return
+// together.
+func solverBusyDelay(retry int, retryAfter time.Duration, jitter func(time.Duration) time.Duration) time.Duration {
+	floor := retryAfter
+	if floor <= 0 {
+		floor = solverBusyRetryFloor
+	}
+	if floor >= maxRetryDelay {
+		return maxRetryDelay
+	}
+	limit := min(max(solverBusyRetryMaxDelay, 2*floor), maxRetryDelay)
+	ceiling := floor
+	for i := 0; i < retry && ceiling < limit; i++ {
+		ceiling *= 2
+	}
+	ceiling = min(ceiling, limit)
+	return floor + jitter(ceiling-floor)
+}
+
+// solverBusyRetryFits reports whether a solver_busy retry after delay would
+// start inside both the retry budget and the caller's context deadline.
+func (c *Client) solverBusyRetryFits(ctx context.Context, started time.Time, delay time.Duration) bool {
+	if c.retryPolicy.MaxRetries == 0 || c.solverBusyRetryBudget <= 0 {
+		return false
+	}
+	next := time.Now().Add(delay)
+	if next.Sub(started) > c.solverBusyRetryBudget {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	return !ok || next.Before(deadline)
 }
 
 func fullJitter(ceiling time.Duration) time.Duration {
