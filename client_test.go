@@ -374,6 +374,7 @@ func TestSolverBusyDelayBounds(t *testing.T) {
 		name       string
 		retry      int
 		retryAfter time.Duration
+		remaining  time.Duration
 		min, max   time.Duration
 	}{
 		{name: "no hint uses the one-second floor", retry: 1, min: time.Second, max: 2 * time.Second},
@@ -385,16 +386,24 @@ func TestSolverBusyDelayBounds(t *testing.T) {
 		{name: "small hint still reaches the cap", retry: 8, retryAfter: 250 * time.Millisecond, min: 250 * time.Millisecond, max: 10 * time.Second},
 		{name: "hint above the cap keeps a jitter window", retry: 3, retryAfter: 20 * time.Second, min: 20 * time.Second, max: 40 * time.Second},
 		{name: "safety cap", retry: 1, retryAfter: 2 * time.Hour, min: maxRetryDelay, max: maxRetryDelay},
+		{name: "window narrows to the remaining budget", retry: 1, retryAfter: 30 * time.Second, remaining: 40 * time.Second, min: 30 * time.Second, max: 40 * time.Second},
+		{name: "floor exactly fills the remaining budget", retry: 2, retryAfter: 5 * time.Second, remaining: 5 * time.Second, min: 5 * time.Second, max: 5 * time.Second},
+		{name: "floor beyond the remaining budget is not undercut", retry: 1, retryAfter: 30 * time.Second, remaining: 10 * time.Second, min: 30 * time.Second, max: 60 * time.Second},
+		{name: "spent budget keeps the full window", retry: 1, remaining: -time.Second, min: time.Second, max: 2 * time.Second},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := solverBusyDelay(test.retry, test.retryAfter, low); got != test.min {
+			remaining := test.remaining
+			if remaining == 0 {
+				remaining = maxRetryDelay
+			}
+			if got := solverBusyDelay(test.retry, test.retryAfter, remaining, low); got != test.min {
 				t.Fatalf("minimum = %s, want %s", got, test.min)
 			}
-			if got := solverBusyDelay(test.retry, test.retryAfter, high); got != test.max {
+			if got := solverBusyDelay(test.retry, test.retryAfter, remaining, high); got != test.max {
 				t.Fatalf("maximum = %s, want %s", got, test.max)
 			}
 			for i := 0; i < 200; i++ {
-				if got := solverBusyDelay(test.retry, test.retryAfter, fullJitter); got < test.min || got > test.max {
+				if got := solverBusyDelay(test.retry, test.retryAfter, remaining, fullJitter); got < test.min || got > test.max {
 					t.Fatalf("jittered delay %s outside [%s, %s]", got, test.min, test.max)
 				}
 			}
@@ -462,6 +471,35 @@ func TestSolverBusyRetryBudgetExhaustion(t *testing.T) {
 	// No retry starts after the budget; allow for the last request itself.
 	if elapsed > budget+time.Second {
 		t.Fatalf("elapsed %s exceeded the %s budget", elapsed, budget)
+	}
+}
+
+func TestSolverBusyLongHintRetriesWithinBudget(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1)%2 == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":"solver_busy","retry_after_ms":300}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"payload":"ok","duration_ms":1}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server,
+		WithRetryPolicy(RetryPolicy{MaxRetries: 1}),
+		WithSolverBusyRetryBudget(500*time.Millisecond))
+
+	// The hint fits the budget but its doubled jitter window does not; the
+	// wait must be drawn inside the budget rather than ending the call with
+	// most of the budget unused.
+	for i := 0; i < 5; i++ {
+		result, err := client.Kasada.CD(context.Background(), &KasadaCDRequest{})
+		if err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		if result.Response.Attempts != 2 {
+			t.Fatalf("call %d attempts = %d", i, result.Response.Attempts)
+		}
 	}
 }
 

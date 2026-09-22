@@ -105,11 +105,11 @@ this behavior with `WithRetryPolicy`.
 against a time budget instead of `MaxRetries`: for up to 45 seconds from the
 start of the call by default. Each wait is at least the server's hint (the
 `retry_after_ms` body field when present, otherwise `Retry-After`) plus full
-jitter whose window doubles per retry, capped at 10 seconds. No retry starts
-after the budget or the context deadline. Change the budget with
-`WithSolverBusyRetryBudget`; zero, or `MaxRetries` zero, disables it.
-`429 quota_exceeded` is never retried. Retries smooth a burst but do not add
-capacity, so bound your own concurrency and ramp large batches.
+jitter whose window doubles per retry, capped at 10 seconds and kept inside
+the budget. No retry starts after the budget or the context deadline. Change
+the budget with `WithSolverBusyRetryBudget`; zero, or `MaxRetries` zero,
+disables it. `429 quota_exceeded` is never retried. Retries smooth a burst but
+do not add capacity, so bound your own concurrency and ramp large batches.
 
 Every successful result has a `Response` field containing status, request ID,
 edge version, `Server-Timing`, and total attempt count. `APIError` provides the

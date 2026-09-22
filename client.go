@@ -355,8 +355,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, conte
 			// the fleet scales, so capacity rejects are retried against a time
 			// budget; a short synchronized burst would only deepen the overload.
 			busyRetries++
-			delay = solverBusyDelay(busyRetries, apiErr.RetryAfter, fullJitter)
-			if !c.solverBusyRetryFits(ctx, started, delay) {
+			elapsed := time.Since(started)
+			delay = solverBusyDelay(busyRetries, apiErr.RetryAfter, c.solverBusyRetryBudget-elapsed, fullJitter)
+			if !c.solverBusyRetryFits(ctx, elapsed, delay) {
 				return meta, err
 			}
 		} else {
@@ -487,8 +488,10 @@ func (c *Client) retryDelay(attempt int, retryAfter time.Duration) time.Duration
 // server's hint is a floor that is never undercut; above it, a full
 // jitter window doubles per retry up to solverBusyRetryMaxDelay (or twice the
 // floor, when that is larger) so clients rejected together do not return
-// together.
-func solverBusyDelay(retry int, retryAfter time.Duration, jitter func(time.Duration) time.Duration) time.Duration {
+// together. While the floor fits in the remaining retry budget, the window
+// is narrowed to end inside it, so a long hint is waited out instead of
+// ending the call at once with most of its budget unused.
+func solverBusyDelay(retry int, retryAfter, remaining time.Duration, jitter func(time.Duration) time.Duration) time.Duration {
 	floor := retryAfter
 	if floor <= 0 {
 		floor = solverBusyRetryFloor
@@ -502,21 +505,24 @@ func solverBusyDelay(retry int, retryAfter time.Duration, jitter func(time.Durat
 		ceiling *= 2
 	}
 	ceiling = min(ceiling, limit)
+	if remaining >= floor {
+		ceiling = min(ceiling, remaining)
+	}
 	return floor + jitter(ceiling-floor)
 }
 
-// solverBusyRetryFits reports whether a solver_busy retry after delay would
-// start inside both the retry budget and the caller's context deadline.
-func (c *Client) solverBusyRetryFits(ctx context.Context, started time.Time, delay time.Duration) bool {
+// solverBusyRetryFits reports whether a solver_busy retry after delay, with
+// elapsed already spent on the call, would start inside both the retry budget
+// and the caller's context deadline.
+func (c *Client) solverBusyRetryFits(ctx context.Context, elapsed, delay time.Duration) bool {
 	if c.retryPolicy.MaxRetries == 0 || c.solverBusyRetryBudget <= 0 {
 		return false
 	}
-	next := time.Now().Add(delay)
-	if next.Sub(started) > c.solverBusyRetryBudget {
+	if elapsed+delay > c.solverBusyRetryBudget {
 		return false
 	}
 	deadline, ok := ctx.Deadline()
-	return !ok || next.Before(deadline)
+	return !ok || time.Now().Add(delay).Before(deadline)
 }
 
 func fullJitter(ceiling time.Duration) time.Duration {
