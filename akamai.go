@@ -14,7 +14,7 @@ type AkamaiService struct {
 	client *Client
 }
 
-// AkamaiSensorConfig controls generated interaction families.
+// AkamaiSensorConfig overrides generated interaction families in local debug mode.
 type AkamaiSensorConfig struct {
 	Mouse    bool `json:"mouse"`
 	Keyboard bool `json:"keyboard"`
@@ -56,21 +56,21 @@ type AkamaiSensorResponse struct {
 }
 
 type akamaiSensorWire struct {
-	Mode           string             `json:"mode"`
-	URL            string             `json:"url"`
-	UserAgent      string             `json:"ua"`
-	ABCK           string             `json:"abck"`
-	BMSZ           string             `json:"bm_sz"`
-	Script         string             `json:"script,omitempty"`
-	ScriptID       string             `json:"script_id,omitempty"`
-	ScriptURL      string             `json:"script_url"`
-	Config         AkamaiSensorConfig `json:"config"`
-	AcceptLanguage string             `json:"accept_language,omitempty"`
-	Language       string             `json:"language,omitempty"`
-	Timezone       string             `json:"timezone,omitempty"`
-	Session        string             `json:"session,omitempty"`
-	Device         map[string]any     `json:"device,omitempty"`
-	Debug          bool               `json:"debug,omitempty"`
+	Mode           string              `json:"mode"`
+	URL            string              `json:"url"`
+	UserAgent      string              `json:"ua"`
+	ABCK           string              `json:"abck"`
+	BMSZ           string              `json:"bm_sz"`
+	Script         string              `json:"script,omitempty"`
+	ScriptID       string              `json:"script_id,omitempty"`
+	ScriptURL      string              `json:"script_url"`
+	Config         *AkamaiSensorConfig `json:"config,omitempty"`
+	AcceptLanguage string              `json:"accept_language,omitempty"`
+	Language       string              `json:"language,omitempty"`
+	Timezone       string              `json:"timezone,omitempty"`
+	Session        string              `json:"session,omitempty"`
+	Device         map[string]any      `json:"device,omitempty"`
+	Debug          bool                `json:"debug,omitempty"`
 }
 
 // Sensor generates Akamai Bot Manager sensor_data. After a successful
@@ -87,13 +87,15 @@ func (s *AkamaiService) Sensor(ctx context.Context, request *AkamaiSensorRequest
 		ABCK:           request.ABCK,
 		BMSZ:           request.BMSZ,
 		ScriptURL:      request.ScriptURL,
-		Config:         request.Config,
 		AcceptLanguage: request.AcceptLanguage,
 		Language:       request.Language,
 		Timezone:       request.Timezone,
 		Session:        request.Session,
 		Device:         request.Device,
 		Debug:          request.Debug,
+	}
+	if request.Debug {
+		wire.Config = &request.Config
 	}
 
 	var scriptID string
