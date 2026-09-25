@@ -251,6 +251,59 @@ func (s *AkamaiService) CPT(ctx context.Context, request *AkamaiCPTRequest) (*Ak
 	return result, nil
 }
 
+// AkamaiSecCPTRequest answers the sec-cpt "Challenge Validation" page (the
+// iframe with provider="crypto"). Token, Timestamp, Nonce, Difficulty and
+// Count come from the base64 JSON in the iframe's challenge attribute or from
+// a chained /_sec/verify response; keep the previous Count when a chained
+// response omits it. SecCPT is the sec_cpt cookie value.
+type AkamaiSecCPTRequest struct {
+	Token      string
+	SecCPT     string
+	Timestamp  int64
+	Nonce      string
+	Difficulty int
+	Count      int
+	Debug      bool
+}
+
+// AkamaiSecCPTResponse carries Count proof answers and Body, the exact
+// request body to POST to /_sec/verify?provider=<provider>.
+type AkamaiSecCPTResponse struct {
+	Cost     float64         `json:"cost"`
+	Success  bool            `json:"success"`
+	Answers  []string        `json:"answers"`
+	Body     string          `json:"body"`
+	Debug    json.RawMessage `json:"debug,omitempty"`
+	Response ResponseMeta    `json:"-"`
+}
+
+// SecCPT solves the proof of work of an Akamai sec-cpt challenge page.
+func (s *AkamaiService) SecCPT(ctx context.Context, request *AkamaiSecCPTRequest) (*AkamaiSecCPTResponse, error) {
+	if request == nil {
+		return nil, &ValidationError{Field: "request", Message: "must not be nil"}
+	}
+	wire := struct {
+		Mode       string `json:"mode"`
+		Token      string `json:"token"`
+		SecCPT     string `json:"sec_cpt"`
+		Timestamp  int64  `json:"timestamp"`
+		Nonce      string `json:"nonce"`
+		Difficulty int    `json:"difficulty"`
+		Count      int    `json:"count"`
+		Debug      bool   `json:"debug,omitempty"`
+	}{
+		Mode: "sec_cpt", Token: request.Token, SecCPT: request.SecCPT, Timestamp: request.Timestamp,
+		Nonce: request.Nonce, Difficulty: request.Difficulty, Count: request.Count, Debug: request.Debug,
+	}
+	result := new(AkamaiSecCPTResponse)
+	meta, err := s.client.doJSON(ctx, "POST", "/v1/solve/akamai", wire, result)
+	if err != nil {
+		return nil, err
+	}
+	result.Response = meta
+	return result, nil
+}
+
 func sha256Hex(value []byte) string {
 	digest := sha256.Sum256(value)
 	return hex.EncodeToString(digest[:])

@@ -55,6 +55,7 @@ so deadlines and cancellation flow through to the API.
 | Akamai Bot Manager | `client.Akamai.Sensor` | `sensor_data`, session, exact UA/language |
 | Akamai SBSD | `client.Akamai.SBSD` | encrypted SBSD body |
 | Akamai Sec-CPT | `client.Akamai.CPT` | ten proof answers |
+| Akamai sec-cpt challenge page | `client.Akamai.SecCPT` | `count` proof answers and the exact `/_sec/verify` body |
 | Kasada sensor | `client.Kasada.Sensor` | encrypted payload and `x-kpsdk-*` headers |
 | Kasada CD | `client.Kasada.CD` | `x-kpsdk-cd` proof body |
 | Incapsula Reese84 | `client.Incapsula.Reese84` | sensor submission body and device session |

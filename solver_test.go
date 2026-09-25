@@ -225,6 +225,25 @@ func TestTypedModesSendCanonicalContracts(t *testing.T) {
 			},
 		},
 		{
+			name:     "akamai sec_cpt",
+			path:     "/v1/solve/akamai",
+			wantMode: "sec_cpt",
+			response: `{"success":true,"answers":["0.8"],"body":"{}"}`,
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.Akamai.SecCPT(ctx, &AkamaiSecCPTRequest{
+					Token: "token", SecCPT: "prefix~1~rest", Timestamp: 1783387618,
+					Nonce: "nonce", Difficulty: 10000, Count: 1,
+				})
+				return err
+			},
+			assertBody: func(t *testing.T, body map[string]any) {
+				if body["sec_cpt"] != "prefix~1~rest" || body["timestamp"] != float64(1783387618) ||
+					body["nonce"] != "nonce" || body["difficulty"] != float64(10000) || body["count"] != float64(1) {
+					t.Fatalf("body = %#v", body)
+				}
+			},
+		},
+		{
 			name:     "kasada sensor",
 			path:     "/v1/solve/kasada",
 			wantMode: "sensor",
