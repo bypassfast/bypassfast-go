@@ -3,7 +3,7 @@
 [![Go](https://github.com/bypassfast/bypassfast-go/actions/workflows/test.yml/badge.svg)](https://github.com/bypassfast/bypassfast-go/actions/workflows/test.yml)
 
 The official, dependency-free Go client for every production Bypass Fast
-solver: Akamai, Kasada, and Incapsula.
+solver: Akamai, Kasada, Incapsula, and PerimeterX / HUMAN.
 
 ```sh
 go get github.com/bypassfast/bypassfast-go
@@ -60,6 +60,8 @@ so deadlines and cancellation flow through to the API.
 | Kasada CD | `client.Kasada.CD` | `x-kpsdk-cd` proof body |
 | Incapsula Reese84 | `client.Incapsula.Reese84` | sensor submission body and device session |
 | Incapsula UTMVC | `client.Incapsula.UTMVC` | `___utmvc` cookie and submission path |
+| PerimeterX init | `client.Perimeterx.Init` | HUMAN cookies, `cookie_header` and an opaque session |
+| PerimeterX hold | `client.Perimeterx.SolveHold` | hold verdict, refreshed cookies, retry advice |
 
 `client.Balance` reads prepaid USD balance. `client.Solve` is a typed escape
 hatch for newly added request fields, but the service methods are preferred.
@@ -82,6 +84,40 @@ The client remembers the SHA-256 associated with each successful mode and full
 script URL. Repeated identical scripts use the URL-only cache path. Changed
 bytes at the same URL are sent in full, and remote cache misses fall back to
 the supplied script automatically.
+
+### PerimeterX flow
+
+PerimeterX is request-only and exit-scoped: `Init`, your own protected
+request and `SolveHold` must all use the same `Proxy`, user agent and
+language. Call `Init` with the page the user would open; install every
+returned cookie and send your protected request yourself. If it comes back
+as a HUMAN block (JSON `428` with `appId`/`blockScript`, or an HTML page
+containing `px-captcha`), call `SolveHold` with the `Session` from `Init`
+and the response exactly as received in `Blocked`.
+
+```go
+initResult, err := client.Perimeterx.Init(ctx, &bypassfast.PerimeterxInitRequest{
+	URL:       "https://www.example.com/en/booking",
+	Proxy:     "socks5h://user:pass@host:1080",
+	UserAgent: "<desktop Chrome user agent>",
+})
+// ... send the protected request with initResult.CookieHeader; on a block:
+hold, err := client.Perimeterx.SolveHold(ctx, &bypassfast.PerimeterxHoldRequest{
+	Session: initResult.Session,
+	Proxy:   "socks5h://user:pass@host:1080",
+	Blocked: &bypassfast.PerimeterxBlockedResponse{
+		URL: blockedURL, Method: "POST", Status: 428, Headers: blockedHeaders, Body: blockedBody,
+	},
+})
+if err == nil && hold.Rejected() && hold.Retry != nil && hold.Retry.ChangeExit {
+	// Switch exit and start again from Init.
+}
+```
+
+A rejected hold is a verdict, not an error: `hold.Rejected()` is true, the
+returned cookies are the pre-hold cookies and `hold.Retry` says whether to
+change exit. PerimeterX bodies may reach 2 MiB (the HTML block page rides in
+`Blocked.Body`); every other route keeps the 1 MiB limit.
 
 ## Errors and retries
 
