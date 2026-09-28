@@ -60,8 +60,8 @@ so deadlines and cancellation flow through to the API.
 | Kasada CD | `client.Kasada.CD` | `x-kpsdk-cd` proof body |
 | Incapsula Reese84 | `client.Incapsula.Reese84` | sensor submission body and device session |
 | Incapsula UTMVC | `client.Incapsula.UTMVC` | `___utmvc` cookie and submission path |
-| PerimeterX init | `client.Perimeterx.Init` | HUMAN cookies, `cookie_header` and an opaque session |
-| PerimeterX hold | `client.Perimeterx.SolveHold` | hold verdict, refreshed cookies, retry advice |
+| PerimeterX init | `client.Perimeterx.Init` | HUMAN cookies and an opaque session |
+| PerimeterX hold | `client.Perimeterx.SolveHold` | `Success`, refreshed cookies, retry advice |
 
 `client.Balance` reads prepaid USD balance. `client.Solve` is a typed escape
 hatch for newly added request fields, but the service methods are preferred.
@@ -87,37 +87,36 @@ the supplied script automatically.
 
 ### PerimeterX flow
 
-PerimeterX is request-only and exit-scoped: `Init`, your own protected
-request and `SolveHold` must all use the same `Proxy`, user agent and
-language. Call `Init` with the page the user would open; install every
-returned cookie and send your protected request yourself. If it comes back
-as a HUMAN block (JSON `428` with `appId`/`blockScript`, or an HTML page
-containing `px-captcha`), call `SolveHold` with the `Session` from `Init`
-and the response exactly as received in `Blocked`.
+`Init` returns the HUMAN cookies for a site; set every one of them and send
+your own requests through the same proxy with the same user agent and
+language. If a request comes back as a HUMAN block (JSON `428` with
+`appId`/`blockScript`, or an HTML page containing `px-captcha`), call
+`SolveHold` with the `Session` from `Init` and the response exactly as
+received, then set the new cookies and retry once.
 
 ```go
-initResult, err := client.Perimeterx.Init(ctx, &bypassfast.PerimeterxInitRequest{
+session, err := client.Perimeterx.Init(ctx, &bypassfast.PerimeterxInitRequest{
 	URL:       "https://www.example.com/en/booking",
-	Proxy:     "socks5h://user:pass@host:1080",
+	Proxy:     "http://user:pass@host:port",
 	UserAgent: "<desktop Chrome user agent>",
 })
-// ... send the protected request with initResult.CookieHeader; on a block:
+// set session.Cookies, send your request; on a block:
 hold, err := client.Perimeterx.SolveHold(ctx, &bypassfast.PerimeterxHoldRequest{
-	Session: initResult.Session,
-	Proxy:   "socks5h://user:pass@host:1080",
+	Session: session.Session,
+	Proxy:   "http://user:pass@host:port",
 	Blocked: &bypassfast.PerimeterxBlockedResponse{
 		URL: blockedURL, Method: "POST", Status: 428, Headers: blockedHeaders, Body: blockedBody,
 	},
 })
-if err == nil && hold.Rejected() && hold.Retry != nil && hold.Retry.ChangeExit {
-	// Switch exit and start again from Init.
+if err == nil && hold.ChangeExit() {
+	// The rejection is tied to this exit: switch exit and start again from Init.
 }
 ```
 
-A rejected hold is a verdict, not an error: `hold.Rejected()` is true, the
-returned cookies are the pre-hold cookies and `hold.Retry` says whether to
-change exit. PerimeterX bodies may reach 2 MiB (the HTML block page rides in
-`Blocked.Body`); every other route keeps the 1 MiB limit.
+`Success` is false when the hold was rejected: the returned cookies are the
+ones you already had and `Retry.ChangeExit` says whether to move to another
+exit. That is not an error. PerimeterX bodies may reach 2 MiB (the HTML
+block page rides in `Blocked.Body`); every other route keeps the 1 MiB limit.
 
 ## Errors and retries
 

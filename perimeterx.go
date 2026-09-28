@@ -8,8 +8,8 @@ import (
 // modes. Init runs the page-sensor session through the caller's proxy and
 // returns the HUMAN cookies plus an opaque session; SolveHold consumes the
 // enforcement response the caller received on a protected request and
-// returns the verdict with refreshed cookies. The caller retries its own
-// request afterwards; a rejected hold is a verdict, not an error.
+// returns refreshed cookies. The caller retries its own request afterwards;
+// a rejected hold is Success false, not an error.
 type PerimeterxService struct {
 	client *Client
 }
@@ -20,14 +20,6 @@ type PerimeterxPlatform string
 const (
 	PerimeterxPlatformChromeWindows PerimeterxPlatform = "chrome-windows"
 	PerimeterxPlatformChromeMac     PerimeterxPlatform = "chrome-mac"
-)
-
-// PerimeterxVerdict is the collector's answer to a hold proof.
-type PerimeterxVerdict string
-
-const (
-	PerimeterxVerdictAccepted PerimeterxVerdict = "accepted"
-	PerimeterxVerdictRejected PerimeterxVerdict = "rejected"
 )
 
 // PerimeterxCookie is a cookie to install before the page fetch, or one the
@@ -110,34 +102,34 @@ type PerimeterxHoldRequest struct {
 
 // PerimeterxRetryAdvice tells the caller how to proceed after a rejected hold.
 type PerimeterxRetryAdvice struct {
-	Recommended bool   `json:"recommended"`
-	ChangeExit  bool   `json:"change_exit"`
-	Reason      string `json:"reason"`
+	ChangeExit bool   `json:"change_exit"`
+	Reason     string `json:"reason"`
 }
 
-// PerimeterxResponse is the result of Init or SolveHold. Cookies are every
-// cookie the solver holds for the site; install all of them before the next
-// protected request. Verdict, Retry and HoldTimeMS are set by SolveHold only.
+// PerimeterxResponse is the result of Init or SolveHold.
+//
+// Success true: install every cookie in Cookies and send (or retry once)
+// your protected request. Success false: the hold was rejected; Cookies are
+// the pre-hold cookies and Retry says what to do (usually change exit and
+// call Init again). A rejected hold is not an error.
 type PerimeterxResponse struct {
-	Mode           string                 `json:"mode"`
-	Cookies        []PerimeterxCookie     `json:"cookies"`
-	CookieHeader   string                 `json:"cookie_header"`
-	Session        string                 `json:"session"`
-	AppID          string                 `json:"app_id"`
-	SensorSHA256   string                 `json:"sensor_sha256"`
-	SupportedBuild bool                   `json:"supported_build"`
-	Verdict        PerimeterxVerdict      `json:"verdict,omitempty"`
-	Retry          *PerimeterxRetryAdvice `json:"retry,omitempty"`
-	HoldTimeMS     int64                  `json:"hold_time_ms,omitempty"`
-	Cost           float64                `json:"cost"`
-	DurationMS     int64                  `json:"duration_ms"`
-	Stages         map[string]int64       `json:"stages,omitempty"`
-	Response       ResponseMeta           `json:"-"`
+	Success  bool                   `json:"success"`
+	Cookies  []PerimeterxCookie     `json:"cookies"`
+	Session  string                 `json:"session"`
+	Retry    *PerimeterxRetryAdvice `json:"retry,omitempty"`
+	Cost     float64                `json:"cost"`
+	Response ResponseMeta           `json:"-"`
 }
 
-// Rejected reports whether a SolveHold result carries a rejected verdict.
+// Rejected reports whether the hold was rejected.
 func (r *PerimeterxResponse) Rejected() bool {
-	return r != nil && r.Verdict == PerimeterxVerdictRejected
+	return r != nil && !r.Success
+}
+
+// ChangeExit reports whether the caller should move to another exit and
+// start again from Init.
+func (r *PerimeterxResponse) ChangeExit() bool {
+	return r != nil && !r.Success && r.Retry != nil && r.Retry.ChangeExit
 }
 
 type perimeterxBlockedWire struct {
@@ -196,7 +188,7 @@ func (s *PerimeterxService) Init(ctx context.Context, request *PerimeterxInitReq
 }
 
 // SolveHold solves the press-and-hold challenge behind a blocked response
-// and returns the verdict with refreshed cookies and the updated session.
+// and returns refreshed cookies and the updated session.
 func (s *PerimeterxService) SolveHold(ctx context.Context, request *PerimeterxHoldRequest) (*PerimeterxResponse, error) {
 	if request == nil {
 		return nil, &ValidationError{Field: "request", Message: "must not be nil"}

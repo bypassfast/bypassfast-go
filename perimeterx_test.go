@@ -28,9 +28,9 @@ func TestPerimeterxInitAndHoldWire(t *testing.T) {
 		mu.Unlock()
 		switch body["mode"] {
 		case "init":
-			_, _ = io.WriteString(w, `{"mode":"init","cookies":[{"name":"_pxvid","value":"v","domain":".example.com","path":"/"}],"cookie_header":"_pxvid=v","session":"sess-1","app_id":"PXabc","sensor_sha256":"ab","supported_build":true,"cost":0.004,"duration_ms":812,"stages":{"page":812}}`)
+			_, _ = io.WriteString(w, `{"success":true,"cookies":[{"name":"_pxvid","value":"v","domain":".example.com","path":"/"}],"session":"sess-1","cost":0.004}`)
 		case "holdcaptcha":
-			_, _ = io.WriteString(w, `{"mode":"holdcaptcha","cookies":[],"cookie_header":"","session":"sess-2","app_id":"PXabc","sensor_sha256":"ab","supported_build":true,"verdict":"rejected","retry":{"recommended":true,"change_exit":true,"reason":"hold_rejected"},"hold_time_ms":4200,"cost":0.004,"duration_ms":18342}`)
+			_, _ = io.WriteString(w, `{"success":false,"cookies":[],"session":"sess-2","retry":{"change_exit":true,"reason":"hold_rejected"},"cost":0.004}`)
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 		}
@@ -65,7 +65,7 @@ func TestPerimeterxInitAndHoldWire(t *testing.T) {
 			BodyBase64: true,
 		},
 	})
-	if err != nil || holdResult.Verdict != PerimeterxVerdictRejected || !holdResult.Rejected() || holdResult.Retry == nil || !holdResult.Retry.ChangeExit || holdResult.HoldTimeMS != 4200 {
+	if err != nil || holdResult.Success || !holdResult.Rejected() || !holdResult.ChangeExit() || holdResult.Retry == nil || holdResult.Retry.Reason != "hold_rejected" {
 		t.Fatalf("hold = %#v, %v", holdResult, err)
 	}
 
@@ -148,7 +148,7 @@ func TestPerimeterxAllowsTwoMiBBlockPages(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		received = len(body)
-		_, _ = io.WriteString(w, `{"mode":"holdcaptcha","cookies":[],"cookie_header":"","session":"s","app_id":"PXabc","sensor_sha256":"ab","supported_build":true,"verdict":"accepted","cost":0.004,"duration_ms":1}`)
+		_, _ = io.WriteString(w, `{"success":true,"cookies":[],"session":"s","cost":0.004}`)
 	}))
 	defer server.Close()
 	client := newTestClient(t, server, WithCompressionThreshold(-1))
@@ -158,7 +158,7 @@ func TestPerimeterxAllowsTwoMiBBlockPages(t *testing.T) {
 	page := strings.Repeat("px-captcha ", (maxRequestBytes+512*1024)/len("px-captcha "))
 	hold := &PerimeterxHoldRequest{Session: "s", Proxy: "p", Blocked: &PerimeterxBlockedResponse{URL: "https://e", Status: 403, Body: page}}
 	result, err := client.Perimeterx.SolveHold(context.Background(), hold)
-	if err != nil || result.Verdict != PerimeterxVerdictAccepted || received <= maxRequestBytes {
+	if err != nil || !result.Success || received <= maxRequestBytes {
 		t.Fatalf("result/err/received = %#v/%v/%d", result, err, received)
 	}
 
@@ -174,14 +174,14 @@ func TestPerimeterxGenericSolveAcceptsSolver(t *testing.T) {
 		if r.URL.Path != "/v1/solve/perimeterx" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		_, _ = io.WriteString(w, `{"mode":"init"}`)
+		_, _ = io.WriteString(w, `{"success":true}`)
 	}))
 	defer server.Close()
 	client := newTestClient(t, server)
 	var response struct {
-		Mode string `json:"mode"`
+		Success bool `json:"success"`
 	}
-	if _, err := client.Solve(context.Background(), SolverPerimeterx, map[string]any{"mode": "init"}, &response); err != nil || response.Mode != "init" {
+	if _, err := client.Solve(context.Background(), SolverPerimeterx, map[string]any{"mode": "init"}, &response); err != nil || !response.Success {
 		t.Fatalf("response/err = %#v/%v", response, err)
 	}
 }
