@@ -31,18 +31,22 @@ const (
 	defaultBaseURL              = "https://api.bypass.fast"
 	defaultCompressionThreshold = 1024
 	maxRequestBytes             = 1024 * 1024
-	maxResponseBytes            = 4 * 1024 * 1024
-	maxConfiguredRetries        = 10
-	maxRetryDelay               = time.Hour
+	// PerimeterX holdcaptcha bodies carry the customer's HTML block page; the
+	// edge and the solver allow 2 MiB for that route only.
+	maxPerimeterxRequestBytes = 2 * 1024 * 1024
+	maxResponseBytes          = 4 * 1024 * 1024
+	maxConfiguredRetries      = 10
+	maxRetryDelay             = time.Hour
 )
 
 // Solver identifies a solver accepted by the unified solve endpoint.
 type Solver string
 
 const (
-	SolverAkamai    Solver = "akamai"
-	SolverKasada    Solver = "kasada"
-	SolverIncapsula Solver = "incapsula"
+	SolverAkamai     Solver = "akamai"
+	SolverKasada     Solver = "kasada"
+	SolverIncapsula  Solver = "incapsula"
+	SolverPerimeterx Solver = "perimeterx"
 )
 
 // RetryPolicy controls retries after the API has returned an explicitly
@@ -148,9 +152,10 @@ type Client struct {
 	userAgent            string
 	scripts              *scriptMemory
 
-	Akamai    *AkamaiService
-	Kasada    *KasadaService
-	Incapsula *IncapsulaService
+	Akamai     *AkamaiService
+	Kasada     *KasadaService
+	Incapsula  *IncapsulaService
+	Perimeterx *PerimeterxService
 }
 
 // NewClient constructs a client using an API key. The default HTTP timeout is
@@ -208,6 +213,7 @@ func NewClient(apiKey string, options ...Option) (*Client, error) {
 	c.Akamai = &AkamaiService{client: c}
 	c.Kasada = &KasadaService{client: c}
 	c.Incapsula = &IncapsulaService{client: c}
+	c.Perimeterx = &PerimeterxService{client: c}
 	return c, nil
 }
 
@@ -239,7 +245,7 @@ func isLoopbackHost(host string) bool {
 // advanced fields not yet represented by this SDK.
 func (c *Client) Solve(ctx context.Context, solver Solver, request, response any) (ResponseMeta, error) {
 	if !solver.valid() {
-		return ResponseMeta{}, &ValidationError{Field: "solver", Message: "must be akamai, kasada, or incapsula"}
+		return ResponseMeta{}, &ValidationError{Field: "solver", Message: "must be akamai, kasada, incapsula, or perimeterx"}
 	}
 	if response == nil || reflect.ValueOf(response).Kind() != reflect.Pointer || reflect.ValueOf(response).IsNil() {
 		return ResponseMeta{}, &ValidationError{Field: "response", Message: "must be a non-nil pointer"}
@@ -249,7 +255,7 @@ func (c *Client) Solve(ctx context.Context, solver Solver, request, response any
 
 func (s Solver) valid() bool {
 	switch s {
-	case SolverAkamai, SolverKasada, SolverIncapsula:
+	case SolverAkamai, SolverKasada, SolverIncapsula, SolverPerimeterx:
 		return true
 	default:
 		return false
@@ -257,6 +263,11 @@ func (s Solver) valid() bool {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, request, response any) (ResponseMeta, error) {
+	return c.doJSONWithLimit(ctx, method, path, request, response, maxRequestBytes)
+}
+
+// doJSONWithLimit is doJSON with a route-specific encoded-body cap.
+func (c *Client) doJSONWithLimit(ctx context.Context, method, path string, request, response any, limit int) (ResponseMeta, error) {
 	var payload []byte
 	var err error
 	if request != nil {
@@ -264,19 +275,19 @@ func (c *Client) doJSON(ctx context.Context, method, path string, request, respo
 		if err != nil {
 			return ResponseMeta{}, &ValidationError{Field: "request", Message: "could not encode JSON", Cause: err}
 		}
-		if len(payload) > maxRequestBytes {
-			return ResponseMeta{}, &ValidationError{Field: "request", Message: "encoded JSON exceeds the 1 MiB API limit"}
+		if len(payload) > limit {
+			return ResponseMeta{}, &ValidationError{Field: "request", Message: fmt.Sprintf("encoded JSON exceeds the %d MiB API limit", limit/(1024*1024))}
 		}
 	}
 
-	wirePayload, contentEncoding, err := c.encodeRequest(payload)
+	wirePayload, contentEncoding, err := c.encodeRequest(payload, limit)
 	if err != nil {
 		return ResponseMeta{}, err
 	}
 	return c.do(ctx, method, path, wirePayload, contentEncoding, response)
 }
 
-func (c *Client) encodeRequest(payload []byte) ([]byte, string, error) {
+func (c *Client) encodeRequest(payload []byte, limit int) ([]byte, string, error) {
 	if len(payload) == 0 || c.compressionThreshold < 0 || len(payload) < c.compressionThreshold {
 		return payload, "", nil
 	}
@@ -294,8 +305,8 @@ func (c *Client) encodeRequest(payload []byte) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("bypassfast: compress request: %w", err)
 	}
 	// Compression is only useful when it reduces bytes, and the edge enforces
-	// the same 1 MiB cap on both wire and decoded bodies.
-	if compressed.Len() >= len(payload) || compressed.Len() > maxRequestBytes {
+	// the same cap on both wire and decoded bodies.
+	if compressed.Len() >= len(payload) || compressed.Len() > limit {
 		return payload, "", nil
 	}
 	return compressed.Bytes(), "gzip", nil
