@@ -60,7 +60,10 @@ type PerimeterxInitRequest struct {
 	// Cookies are installed before the page fetch, for example cookies from
 	// another solver.
 	Cookies []PerimeterxCookie
-	// AppID optionally pins the HUMAN application id (PX........).
+	// AppID is the HUMAN application id (PX........). Inferred for the
+	// supported hosts; required for any other site. The sensor is fetched
+	// from origin + the app's first-party path, never discovered from the
+	// page.
 	AppID string
 }
 
