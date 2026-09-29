@@ -94,6 +94,10 @@ type APIError struct {
 	Code     string
 	Message  string
 	Stage    string
+	// Reason refines some codes; for PerimeterX proxy_error it says how the
+	// proxy failed (proxy_auth_failed, proxy_no_exit, proxy_refused,
+	// proxy_unreachable, proxy_timeout, proxy_connection_dropped).
+	Reason string
 	// RetryAfter is the server's retry hint: the response's retry_after_ms
 	// field when present, otherwise its Retry-After header. Zero means none.
 	RetryAfter time.Duration
@@ -120,6 +124,10 @@ func (e *APIError) Retryable() bool {
 		return false
 	}
 	switch e.Code {
+	case "proxy_error":
+		// The customer's proxy or exit failed; the same request through the
+		// same exit fails again. Switch exit instead of retrying.
+		return false
 	case "quota_exceeded", "billing_disabled", "hard_block", "unsupported_challenge",
 		"unsupported_script", "solve_failed", "not_verified", "solve_timeout",
 		"script_cache_miss":
@@ -147,6 +155,7 @@ func decodeAPIError(payload []byte) *APIError {
 		ErrorCode string `json:"error_code"`
 		Message   string `json:"message"`
 		Stage     string `json:"stage"`
+		Reason    string `json:"reason"`
 		// Kept raw so a malformed hint cannot discard the error code.
 		RetryAfterMS json.RawMessage `json:"retry_after_ms"`
 	}
@@ -160,7 +169,7 @@ func decodeAPIError(payload []byte) *APIError {
 	if code == "" {
 		code = "http_error"
 	}
-	return &APIError{Code: code, Message: wire.Message, Stage: wire.Stage, RetryAfter: parseRetryAfterMS(wire.RetryAfterMS)}
+	return &APIError{Code: code, Message: wire.Message, Stage: wire.Stage, Reason: wire.Reason, RetryAfter: parseRetryAfterMS(wire.RetryAfterMS)}
 }
 
 // parseRetryAfterMS converts the optional retry_after_ms body field. Values

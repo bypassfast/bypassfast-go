@@ -679,3 +679,19 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
 }
+
+// A PerimeterX proxy_error names how the customer's proxy failed and is not
+// retried: the same exit fails again, the caller must switch exits.
+func TestProxyErrorCarriesReasonAndIsNotRetried(t *testing.T) {
+	apiErr := decodeAPIError([]byte(`{"error":"proxy_error","message":"your proxy rejected the credentials (407); check the user and password","stage":"prelude","reason":"proxy_auth_failed"}`))
+	apiErr.Response.StatusCode = http.StatusBadGateway
+	if apiErr.Code != "proxy_error" || apiErr.Reason != "proxy_auth_failed" || apiErr.Stage != "prelude" {
+		t.Fatalf("decoded %+v", apiErr)
+	}
+	if apiErr.Retryable() {
+		t.Fatal("proxy_error must not be retried through the same exit")
+	}
+	if other := decodeAPIError([]byte(`{"error":"target_error"}`)); other.Reason != "" {
+		t.Fatalf("reason on another code = %q", other.Reason)
+	}
+}
