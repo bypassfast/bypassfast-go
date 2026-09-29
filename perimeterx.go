@@ -42,15 +42,20 @@ type PerimeterxInitRequest struct {
 	// Proxy is the exit the whole flow must share: an http(s):// or
 	// socks5(h):// URL with credentials. Required.
 	Proxy string
-	// UserAgent must be a desktop Chrome UA whose major has a device bundle.
-	// Required.
+	// UserAgent is optional. When set it must be a desktop Chrome UA whose
+	// major the solver can transport (Chrome 147, 151, 152, 153 today) and
+	// Platform must agree with it. When empty the solver draws a real Chrome
+	// build from its adoption-weighted version pool for Platform and returns
+	// the user agent it used in PerimeterxResponse.UserAgent; send your own
+	// requests with that value.
 	UserAgent string
 	// AcceptLanguage defaults to "en-US,en;q=0.9".
 	AcceptLanguage string
 	// Timezone is an IANA zone matching the exit's region (default
 	// America/New_York).
 	Timezone string
-	// Platform defaults to chrome-windows and must agree with UserAgent.
+	// Platform defaults to chrome-windows and must agree with UserAgent when
+	// one is sent.
 	Platform PerimeterxPlatform
 	// Referer is the navigation referrer for the page fetch.
 	Referer string
@@ -116,12 +121,17 @@ type PerimeterxRetryAdvice struct {
 // the pre-hold cookies and Retry says what to do (usually change exit and
 // call Init again). A rejected hold is not an error.
 type PerimeterxResponse struct {
-	Success  bool                   `json:"success"`
-	Cookies  []PerimeterxCookie     `json:"cookies"`
-	Session  string                 `json:"session"`
-	Retry    *PerimeterxRetryAdvice `json:"retry,omitempty"`
-	Cost     float64                `json:"cost"`
-	Response ResponseMeta           `json:"-"`
+	Success bool                   `json:"success"`
+	Cookies []PerimeterxCookie     `json:"cookies"`
+	Session string                 `json:"session"`
+	Retry   *PerimeterxRetryAdvice `json:"retry,omitempty"`
+	// UserAgent is the desktop Chrome user agent the session runs as: the
+	// one you sent, or the build the solver drew when you sent none. Send
+	// every request for this session (and the blocked response you forward
+	// to SolveHold) with exactly this value.
+	UserAgent string       `json:"ua,omitempty"`
+	Cost      float64      `json:"cost"`
+	Response  ResponseMeta `json:"-"`
 }
 
 // Rejected reports whether the hold was rejected.
@@ -170,9 +180,6 @@ func (s *PerimeterxService) Init(ctx context.Context, request *PerimeterxInitReq
 	}
 	if request.Proxy == "" {
 		return nil, &ValidationError{Field: "Proxy", Message: "must not be empty"}
-	}
-	if request.UserAgent == "" {
-		return nil, &ValidationError{Field: "UserAgent", Message: "must not be empty"}
 	}
 	wire := perimeterxWire{
 		Mode:           "init",

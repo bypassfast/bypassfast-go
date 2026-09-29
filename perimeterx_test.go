@@ -97,6 +97,30 @@ func TestPerimeterxInitAndHoldWire(t *testing.T) {
 	}
 }
 
+// An init without a user agent is sent without a ua key; the solver draws
+// the Chrome build and the SDK hands its ua back to the caller.
+func TestPerimeterxInitWithoutUserAgentAdoptsTheSolverDraw(t *testing.T) {
+	var wire map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_, _ = io.WriteString(w, `{"success":true,"cookies":[],"session":"sess-3","ua":"Mozilla/5.0 Chrome/152.0.0.0","cost":0.004}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithCompressionThreshold(-1))
+	result, err := client.Perimeterx.Init(context.Background(), &PerimeterxInitRequest{URL: "https://www.example.com/", Proxy: "socks5h://user:pass@host:1080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := wire["ua"]; present {
+		t.Fatalf("init wire carried an empty ua: %#v", wire)
+	}
+	if result.UserAgent != "Mozilla/5.0 Chrome/152.0.0.0" || result.Session != "sess-3" {
+		t.Fatalf("init = %#v", result)
+	}
+}
+
 func TestPerimeterxValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("request reached the server")
@@ -115,10 +139,6 @@ func TestPerimeterxValidation(t *testing.T) {
 		}},
 		{"init without proxy", func() error {
 			_, err := client.Perimeterx.Init(context.Background(), &PerimeterxInitRequest{URL: "https://e", UserAgent: "u"})
-			return err
-		}},
-		{"init without ua", func() error {
-			_, err := client.Perimeterx.Init(context.Background(), &PerimeterxInitRequest{URL: "https://e", Proxy: "p"})
 			return err
 		}},
 		{"nil hold", func() error { _, err := client.Perimeterx.SolveHold(context.Background(), nil); return err }},
