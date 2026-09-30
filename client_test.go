@@ -684,14 +684,20 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 // retried: the same exit fails again, the caller must switch exits.
 func TestProxyErrorCarriesReasonAndIsNotRetried(t *testing.T) {
 	apiErr := decodeAPIError([]byte(`{"error":"proxy_error","message":"your proxy rejected the credentials (407); check the user and password","stage":"prelude","reason":"proxy_auth_failed"}`))
-	apiErr.Response.StatusCode = http.StatusBadGateway
+	apiErr.Response.StatusCode = http.StatusFailedDependency
 	if apiErr.Code != "proxy_error" || apiErr.Reason != "proxy_auth_failed" || apiErr.Stage != "prelude" {
 		t.Fatalf("decoded %+v", apiErr)
 	}
 	if apiErr.Retryable() {
 		t.Fatal("proxy_error must not be retried through the same exit")
 	}
-	if other := decodeAPIError([]byte(`{"error":"target_error"}`)); other.Reason != "" {
+	other := decodeAPIError([]byte(`{"error":"target_error"}`))
+	if other.Reason != "" {
 		t.Fatalf("reason on another code = %q", other.Reason)
+	}
+	// target_error answers 424, not a 5xx, and stays retryable.
+	other.Response.StatusCode = http.StatusFailedDependency
+	if !other.Retryable() {
+		t.Fatal("target_error at 424 is no longer retryable")
 	}
 }

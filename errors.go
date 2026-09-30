@@ -96,7 +96,9 @@ type APIError struct {
 	Stage    string
 	// Reason refines some codes; for PerimeterX proxy_error it says how the
 	// proxy failed (proxy_auth_failed, proxy_no_exit, proxy_refused,
-	// proxy_unreachable, proxy_timeout, proxy_connection_dropped).
+	// proxy_unreachable, proxy_timeout, proxy_connection_dropped,
+	// proxy_tls_intercepted). PerimeterX answers proxy_error and target_error
+	// with 424: the failure is outside the solver.
 	Reason string
 	// RetryAfter is the server's retry hint: the response's retry_after_ms
 	// field when present, otherwise its Retry-After header. Zero means none.
@@ -136,7 +138,10 @@ func (e *APIError) Retryable() bool {
 		"edge_unavailable", "solver_unavailable", "api_key_store_unavailable",
 		"org_status_unavailable", "cf_allowlist_unavailable", "request_cancelled",
 		"internal", "internal_error", "no_devices_available", "device_unavailable",
-		"script_cache_unavailable", "captcha_builder_unavailable":
+		"script_cache_unavailable", "captcha_builder_unavailable",
+		// The site or HUMAN failed to answer (424); a later attempt can
+		// succeed on the same exit.
+		"target_error":
 		return true
 	}
 	return e.Response.StatusCode >= 500 && e.Response.StatusCode <= 599
