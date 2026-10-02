@@ -151,12 +151,19 @@ func (s *AkamaiService) Sensor(ctx context.Context, request *AkamaiSensorRequest
 // later SBSD (or sensor) call for that page. Later calls may set ScriptID
 // (also returned) instead of Script; a 409 script_cache_miss means that
 // script must be sent once more in full.
+//
+// Post "telemetry" asks for the page's next telemetry post instead of the
+// fingerprint (the program sends two after it, built from the input the
+// sensor recorded on the same Session). Wait WaitMS before posting the body,
+// or set Pace to have the response held until then.
 type AkamaiSBSDRequest struct {
 	URL             string
 	UserAgent       string
 	Script          []byte
 	ScriptID        string
 	Session         string
+	Post            string
+	Pace            bool
 	ScriptURL       string
 	SBSDO           string
 	AcceptLanguage  string
@@ -173,11 +180,16 @@ type AkamaiSBSDRequest struct {
 // the Session that pins this page's device for later calls, and the ScriptID
 // those calls may send instead of the script.
 type AkamaiSBSDResponse struct {
-	Cost     float64         `json:"cost"`
-	Success  bool            `json:"success"`
-	Body     string          `json:"body"`
-	Session  string          `json:"session"`
-	ScriptID string          `json:"script_id"`
+	Cost     float64 `json:"cost"`
+	Success  bool    `json:"success"`
+	Body     string  `json:"body"`
+	Session  string  `json:"session"`
+	ScriptID string  `json:"script_id"`
+	// Post is "telemetry" on a telemetry response; Ind is which of the two
+	// posts it is and WaitMS how long to wait before posting the body.
+	Post     string          `json:"sbsd_post,omitempty"`
+	Ind      int             `json:"ind,omitempty"`
+	WaitMS   int             `json:"wait_ms,omitempty"`
 	Debug    json.RawMessage `json:"debug,omitempty"`
 	Response ResponseMeta    `json:"-"`
 }
@@ -194,6 +206,8 @@ func (s *AkamaiService) SBSD(ctx context.Context, request *AkamaiSBSDRequest) (*
 		Script          string         `json:"script,omitempty"`
 		ScriptID        string         `json:"script_id,omitempty"`
 		Session         string         `json:"session,omitempty"`
+		Post            string         `json:"sbsd_post,omitempty"`
+		Pace            bool           `json:"pace,omitempty"`
 		ScriptURL       string         `json:"script_url"`
 		SBSDO           string         `json:"sbsd_o"`
 		AcceptLanguage  string         `json:"accept_language,omitempty"`
@@ -210,6 +224,8 @@ func (s *AkamaiService) SBSD(ctx context.Context, request *AkamaiSBSDRequest) (*
 		UserAgent:       request.UserAgent,
 		ScriptID:        strings.ToLower(strings.TrimSpace(request.ScriptID)),
 		Session:         request.Session,
+		Post:            request.Post,
+		Pace:            request.Pace,
 		ScriptURL:       request.ScriptURL,
 		SBSDO:           request.SBSDO,
 		AcceptLanguage:  request.AcceptLanguage,
