@@ -145,10 +145,18 @@ func (s *AkamaiService) Sensor(ctx context.Context, request *AkamaiSensorRequest
 
 // AkamaiSBSDRequest generates the encrypted Akamai side-band payload. Script
 // contains raw JavaScript bytes and is base64-encoded by the SDK.
+//
+// A page posts SBSD several times and every post must describe the same
+// machine: keep the Session the first response returned and set it on every
+// later SBSD (or sensor) call for that page. Later calls may set ScriptID
+// (also returned) instead of Script; a 409 script_cache_miss means that
+// script must be sent once more in full.
 type AkamaiSBSDRequest struct {
 	URL             string
 	UserAgent       string
 	Script          []byte
+	ScriptID        string
+	Session         string
 	ScriptURL       string
 	SBSDO           string
 	AcceptLanguage  string
@@ -161,11 +169,15 @@ type AkamaiSBSDRequest struct {
 	Debug           bool
 }
 
-// AkamaiSBSDResponse contains the complete encrypted body to submit upstream.
+// AkamaiSBSDResponse contains the complete encrypted body to submit upstream,
+// the Session that pins this page's device for later calls, and the ScriptID
+// those calls may send instead of the script.
 type AkamaiSBSDResponse struct {
 	Cost     float64         `json:"cost"`
 	Success  bool            `json:"success"`
 	Body     string          `json:"body"`
+	Session  string          `json:"session"`
+	ScriptID string          `json:"script_id"`
 	Debug    json.RawMessage `json:"debug,omitempty"`
 	Response ResponseMeta    `json:"-"`
 }
@@ -179,7 +191,9 @@ func (s *AkamaiService) SBSD(ctx context.Context, request *AkamaiSBSDRequest) (*
 		Mode            string         `json:"mode"`
 		URL             string         `json:"url"`
 		UserAgent       string         `json:"ua"`
-		Script          string         `json:"script"`
+		Script          string         `json:"script,omitempty"`
+		ScriptID        string         `json:"script_id,omitempty"`
+		Session         string         `json:"session,omitempty"`
 		ScriptURL       string         `json:"script_url"`
 		SBSDO           string         `json:"sbsd_o"`
 		AcceptLanguage  string         `json:"accept_language,omitempty"`
@@ -194,7 +208,8 @@ func (s *AkamaiService) SBSD(ctx context.Context, request *AkamaiSBSDRequest) (*
 		Mode:            "sbsd",
 		URL:             request.URL,
 		UserAgent:       request.UserAgent,
-		Script:          base64.StdEncoding.EncodeToString(request.Script),
+		ScriptID:        strings.ToLower(strings.TrimSpace(request.ScriptID)),
+		Session:         request.Session,
 		ScriptURL:       request.ScriptURL,
 		SBSDO:           request.SBSDO,
 		AcceptLanguage:  request.AcceptLanguage,
@@ -205,6 +220,11 @@ func (s *AkamaiService) SBSD(ctx context.Context, request *AkamaiSBSDRequest) (*
 		ResourceURLs:    request.ResourceURLs,
 		DOMResourceURLs: request.DOMResourceURLs,
 		Debug:           request.Debug,
+	}
+	if len(request.Script) > 0 {
+		wire.Script = base64.StdEncoding.EncodeToString(request.Script)
+	} else if wire.ScriptID == "" {
+		return nil, &ValidationError{Field: "script", Message: "set Script, or ScriptID from an earlier response"}
 	}
 	result := new(AkamaiSBSDResponse)
 	meta, err := s.client.doJSON(ctx, "POST", "/v1/solve/akamai", wire, result)
