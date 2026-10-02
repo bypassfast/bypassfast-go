@@ -118,8 +118,8 @@ type PerimeterxRetryAdvice struct {
 //
 // Success true: install every cookie in Cookies and send (or retry once)
 // your protected request. Success false: the hold was rejected; Cookies are
-// the pre-hold cookies and Retry says what to do (usually change exit and
-// call Init again). A rejected hold is not an error.
+// the pre-hold cookies. A rejected hold is not an error and should not be
+// retried unless Retry explicitly supplies a safe action.
 type PerimeterxResponse struct {
 	Success bool                   `json:"success"`
 	Cookies []PerimeterxCookie     `json:"cookies"`

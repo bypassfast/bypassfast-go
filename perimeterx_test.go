@@ -30,7 +30,7 @@ func TestPerimeterxInitAndHoldWire(t *testing.T) {
 		case "init":
 			_, _ = io.WriteString(w, `{"success":true,"cookies":[{"name":"_pxvid","value":"v","domain":".example.com","path":"/"}],"session":"sess-1","cost":0.004}`)
 		case "holdcaptcha":
-			_, _ = io.WriteString(w, `{"success":false,"cookies":[],"session":"sess-2","retry":{"change_exit":true,"reason":"hold_rejected"},"cost":0.004}`)
+			_, _ = io.WriteString(w, `{"success":false,"cookies":[],"session":"sess-2","cost":0.004}`)
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 		}
@@ -65,7 +65,7 @@ func TestPerimeterxInitAndHoldWire(t *testing.T) {
 			BodyBase64: true,
 		},
 	})
-	if err != nil || holdResult.Success || !holdResult.Rejected() || !holdResult.ChangeExit() || holdResult.Retry == nil || holdResult.Retry.Reason != "hold_rejected" {
+	if err != nil || holdResult.Success || !holdResult.Rejected() || holdResult.ChangeExit() || holdResult.Retry != nil {
 		t.Fatalf("hold = %#v, %v", holdResult, err)
 	}
 

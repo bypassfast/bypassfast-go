@@ -108,15 +108,16 @@ hold, err := client.Perimeterx.SolveHold(ctx, &bypassfast.PerimeterxHoldRequest{
 		URL: blockedURL, Method: "POST", Status: 428, Headers: blockedHeaders, Body: blockedBody,
 	},
 })
-if err == nil && hold.ChangeExit() {
-	// The rejection is tied to this exit: switch exit and start again from Init.
+if err == nil && !hold.Success {
+	// Stop. A rejected hold is billed and may reflect an app-wide HUMAN rule.
 }
 ```
 
 `Success` is false when the hold was rejected: the returned cookies are the
-ones you already had and `Retry.ChangeExit` says whether to move to another
-exit. That is not an error. PerimeterX bodies may reach 2 MiB (the HTML
-block page rides in `Blocked.Body`); every other route keeps the 1 MiB limit.
+ones you already had. Stop unless `Retry` explicitly supplies a safe action;
+blindly changing exits can amplify an app-wide rejection. That is not an
+error. PerimeterX bodies may reach 2 MiB (the HTML block page rides in
+`Blocked.Body`); every other route keeps the 1 MiB limit.
 
 ## Errors and retries
 
