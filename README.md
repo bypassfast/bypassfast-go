@@ -171,5 +171,5 @@ keys, proxy credentials, device sessions, target cookies, and challenge tokens.
 
 ## Releasing
 
-Releases are published from the SDK's public mirror with standard semantic
+Releases are published from the SDK's mirror repository with standard semantic
 version tags such as `v0.1.0`. Keep the tag and `Version` constant aligned.
