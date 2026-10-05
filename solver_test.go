@@ -51,7 +51,7 @@ func TestAkamaiSensorScriptReuseAndFallback(t *testing.T) {
 	}
 	for _, request := range requests {
 		if _, exists := request["config"]; exists {
-			t.Fatal("non-debug sensor request included config")
+			t.Fatal("sensor request included config")
 		}
 	}
 	wantScript := base64.StdEncoding.EncodeToString(script)
@@ -63,28 +63,6 @@ func TestAkamaiSensorScriptReuseAndFallback(t *testing.T) {
 	}
 	if requests[2]["script"] != wantScript {
 		t.Fatalf("fallback request = %#v", requests[2])
-	}
-}
-
-func TestAkamaiSensorDebugSendsConfig(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		config, ok := body["config"].(map[string]any)
-		if !ok || body["debug"] != true || config["touch"] != true {
-			t.Errorf("debug config missing from sensor request")
-		}
-		_, _ = io.WriteString(w, `{"success":true,"sensor_data":"sensor"}`)
-	}))
-	defer server.Close()
-	client := newTestClient(t, server)
-	_, err := client.Akamai.Sensor(context.Background(), &AkamaiSensorRequest{
-		Debug: true, Config: AkamaiSensorConfig{Touch: true},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 

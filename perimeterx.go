@@ -239,7 +239,7 @@ func (s *PerimeterxService) SolveHold(ctx context.Context, request *PerimeterxHo
 
 func (s *PerimeterxService) solve(ctx context.Context, wire perimeterxWire) (*PerimeterxResponse, error) {
 	result := new(PerimeterxResponse)
-	meta, err := s.client.doJSONWithLimit(ctx, "POST", "/v1/solve/perimeterx", wire, result, maxPerimeterxRequestBytes)
+	meta, err := s.client.doJSONWithLimit(ctx, "POST", "/v1/solve/perimeterx", wire, result, maxPerimeterxRequestBytes, s.client.perimeterxTimeout)
 	if err != nil {
 		return nil, err
 	}

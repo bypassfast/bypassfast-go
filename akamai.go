@@ -5,21 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"strings"
 )
 
 // AkamaiService provides Akamai Bot Manager solve modes.
 type AkamaiService struct {
 	client *Client
-}
-
-// AkamaiSensorConfig overrides generated interaction families in local debug mode.
-type AkamaiSensorConfig struct {
-	Mouse    bool `json:"mouse"`
-	Keyboard bool `json:"keyboard"`
-	Touch    bool `json:"touch"`
-	Beta     bool `json:"beta"`
 }
 
 // AkamaiSensorRequest generates Bot Manager sensor_data. Script contains raw
@@ -32,45 +23,38 @@ type AkamaiSensorRequest struct {
 	Script         []byte
 	ScriptID       string
 	ScriptURL      string
-	Config         AkamaiSensorConfig
 	AcceptLanguage string
 	Language       string
 	Timezone       string
 	Session        string
-	Device         map[string]any
-	Debug          bool
 }
 
 // AkamaiSensorResponse contains the artifact and exact client identity that
 // must be used for the target exchange.
 type AkamaiSensorResponse struct {
-	Cost       float64         `json:"cost"`
-	Success    bool            `json:"success"`
-	SensorData string          `json:"sensor_data"`
-	UserAgent  string          `json:"ua"`
-	Session    string          `json:"session"`
-	Language   string          `json:"language"`
-	ScriptID   string          `json:"script_id"`
-	Debug      json.RawMessage `json:"debug,omitempty"`
-	Response   ResponseMeta    `json:"-"`
+	Cost       float64      `json:"cost"`
+	Success    bool         `json:"success"`
+	SensorData string       `json:"sensor_data"`
+	UserAgent  string       `json:"ua"`
+	Session    string       `json:"session"`
+	Language   string       `json:"language"`
+	ScriptID   string       `json:"script_id"`
+	Response   ResponseMeta `json:"-"`
 }
 
 type akamaiSensorWire struct {
-	Mode           string              `json:"mode"`
-	URL            string              `json:"url"`
-	UserAgent      string              `json:"ua"`
-	ABCK           string              `json:"abck"`
-	BMSZ           string              `json:"bm_sz"`
-	Script         string              `json:"script,omitempty"`
-	ScriptID       string              `json:"script_id,omitempty"`
-	ScriptURL      string              `json:"script_url"`
-	Config         *AkamaiSensorConfig `json:"config,omitempty"`
-	AcceptLanguage string              `json:"accept_language,omitempty"`
-	Language       string              `json:"language,omitempty"`
-	Timezone       string              `json:"timezone,omitempty"`
-	Session        string              `json:"session,omitempty"`
-	Device         map[string]any      `json:"device,omitempty"`
-	Debug          bool                `json:"debug,omitempty"`
+	Mode           string `json:"mode"`
+	URL            string `json:"url"`
+	UserAgent      string `json:"ua"`
+	ABCK           string `json:"abck"`
+	BMSZ           string `json:"bm_sz"`
+	Script         string `json:"script,omitempty"`
+	ScriptID       string `json:"script_id,omitempty"`
+	ScriptURL      string `json:"script_url"`
+	AcceptLanguage string `json:"accept_language,omitempty"`
+	Language       string `json:"language,omitempty"`
+	Timezone       string `json:"timezone,omitempty"`
+	Session        string `json:"session,omitempty"`
 }
 
 // Sensor generates Akamai Bot Manager sensor_data. After a successful
@@ -91,11 +75,6 @@ func (s *AkamaiService) Sensor(ctx context.Context, request *AkamaiSensorRequest
 		Language:       request.Language,
 		Timezone:       request.Timezone,
 		Session:        request.Session,
-		Device:         request.Device,
-		Debug:          request.Debug,
-	}
-	if request.Debug {
-		wire.Config = &request.Config
 	}
 
 	var scriptID string
@@ -170,10 +149,8 @@ type AkamaiSBSDRequest struct {
 	Language        string
 	Timezone        string
 	UUID            string
-	Device          map[string]any
 	ResourceURLs    []string
 	DOMResourceURLs []string
-	Debug           bool
 }
 
 // AkamaiSBSDResponse contains the complete encrypted body to submit upstream,
@@ -187,11 +164,10 @@ type AkamaiSBSDResponse struct {
 	ScriptID string  `json:"script_id"`
 	// Post is "telemetry" on a telemetry response; Ind is which of the two
 	// posts it is and WaitMS how long to wait before posting the body.
-	Post     string          `json:"sbsd_post,omitempty"`
-	Ind      int             `json:"ind,omitempty"`
-	WaitMS   int             `json:"wait_ms,omitempty"`
-	Debug    json.RawMessage `json:"debug,omitempty"`
-	Response ResponseMeta    `json:"-"`
+	Post     string       `json:"sbsd_post,omitempty"`
+	Ind      int          `json:"ind,omitempty"`
+	WaitMS   int          `json:"wait_ms,omitempty"`
+	Response ResponseMeta `json:"-"`
 }
 
 // SBSD generates an encrypted side-band payload.
@@ -200,24 +176,22 @@ func (s *AkamaiService) SBSD(ctx context.Context, request *AkamaiSBSDRequest) (*
 		return nil, &ValidationError{Field: "request", Message: "must not be nil"}
 	}
 	wire := struct {
-		Mode            string         `json:"mode"`
-		URL             string         `json:"url"`
-		UserAgent       string         `json:"ua"`
-		Script          string         `json:"script,omitempty"`
-		ScriptID        string         `json:"script_id,omitempty"`
-		Session         string         `json:"session,omitempty"`
-		Post            string         `json:"sbsd_post,omitempty"`
-		Pace            bool           `json:"pace,omitempty"`
-		ScriptURL       string         `json:"script_url"`
-		SBSDO           string         `json:"sbsd_o"`
-		AcceptLanguage  string         `json:"accept_language,omitempty"`
-		Language        string         `json:"language,omitempty"`
-		Timezone        string         `json:"timezone,omitempty"`
-		UUID            string         `json:"uuid,omitempty"`
-		Device          map[string]any `json:"device,omitempty"`
-		ResourceURLs    []string       `json:"resource_urls,omitempty"`
-		DOMResourceURLs []string       `json:"dom_resource_urls,omitempty"`
-		Debug           bool           `json:"debug,omitempty"`
+		Mode            string   `json:"mode"`
+		URL             string   `json:"url"`
+		UserAgent       string   `json:"ua"`
+		Script          string   `json:"script,omitempty"`
+		ScriptID        string   `json:"script_id,omitempty"`
+		Session         string   `json:"session,omitempty"`
+		Post            string   `json:"sbsd_post,omitempty"`
+		Pace            bool     `json:"pace,omitempty"`
+		ScriptURL       string   `json:"script_url"`
+		SBSDO           string   `json:"sbsd_o"`
+		AcceptLanguage  string   `json:"accept_language,omitempty"`
+		Language        string   `json:"language,omitempty"`
+		Timezone        string   `json:"timezone,omitempty"`
+		UUID            string   `json:"uuid,omitempty"`
+		ResourceURLs    []string `json:"resource_urls,omitempty"`
+		DOMResourceURLs []string `json:"dom_resource_urls,omitempty"`
 	}{
 		Mode:            "sbsd",
 		URL:             request.URL,
@@ -232,10 +206,8 @@ func (s *AkamaiService) SBSD(ctx context.Context, request *AkamaiSBSDRequest) (*
 		Language:        request.Language,
 		Timezone:        request.Timezone,
 		UUID:            request.UUID,
-		Device:          request.Device,
 		ResourceURLs:    request.ResourceURLs,
 		DOMResourceURLs: request.DOMResourceURLs,
-		Debug:           request.Debug,
 	}
 	if len(request.Script) > 0 {
 		wire.Script = base64.StdEncoding.EncodeToString(request.Script)
@@ -255,16 +227,14 @@ func (s *AkamaiService) SBSD(ctx context.Context, request *AkamaiSBSDRequest) (*
 type AkamaiCPTRequest struct {
 	Token      string
 	Difficulty int
-	Debug      bool
 }
 
 // AkamaiCPTResponse contains the ten Sec-CPT proof answers.
 type AkamaiCPTResponse struct {
-	Cost     float64         `json:"cost"`
-	Success  bool            `json:"success"`
-	Answers  []string        `json:"answers"`
-	Debug    json.RawMessage `json:"debug,omitempty"`
-	Response ResponseMeta    `json:"-"`
+	Cost     float64      `json:"cost"`
+	Success  bool         `json:"success"`
+	Answers  []string     `json:"answers"`
+	Response ResponseMeta `json:"-"`
 }
 
 // CPT solves an Akamai Sec-CPT proof-of-work challenge.
@@ -276,8 +246,7 @@ func (s *AkamaiService) CPT(ctx context.Context, request *AkamaiCPTRequest) (*Ak
 		Mode       string `json:"mode"`
 		Token      string `json:"token"`
 		Difficulty int    `json:"difficulty"`
-		Debug      bool   `json:"debug,omitempty"`
-	}{Mode: "cpt", Token: request.Token, Difficulty: request.Difficulty, Debug: request.Debug}
+	}{Mode: "cpt", Token: request.Token, Difficulty: request.Difficulty}
 	result := new(AkamaiCPTResponse)
 	meta, err := s.client.doJSON(ctx, "POST", "/v1/solve/akamai", wire, result)
 	if err != nil {
@@ -299,18 +268,16 @@ type AkamaiSecCPTRequest struct {
 	Nonce      string
 	Difficulty int
 	Count      int
-	Debug      bool
 }
 
 // AkamaiSecCPTResponse carries Count proof answers and Body, the exact
 // request body to POST to /_sec/verify?provider=<provider>.
 type AkamaiSecCPTResponse struct {
-	Cost     float64         `json:"cost"`
-	Success  bool            `json:"success"`
-	Answers  []string        `json:"answers"`
-	Body     string          `json:"body"`
-	Debug    json.RawMessage `json:"debug,omitempty"`
-	Response ResponseMeta    `json:"-"`
+	Cost     float64      `json:"cost"`
+	Success  bool         `json:"success"`
+	Answers  []string     `json:"answers"`
+	Body     string       `json:"body"`
+	Response ResponseMeta `json:"-"`
 }
 
 // SecCPT solves the proof of work of an Akamai sec-cpt challenge page.
@@ -326,10 +293,9 @@ func (s *AkamaiService) SecCPT(ctx context.Context, request *AkamaiSecCPTRequest
 		Nonce      string `json:"nonce"`
 		Difficulty int    `json:"difficulty"`
 		Count      int    `json:"count"`
-		Debug      bool   `json:"debug,omitempty"`
 	}{
 		Mode: "sec_cpt", Token: request.Token, SecCPT: request.SecCPT, Timestamp: request.Timestamp,
-		Nonce: request.Nonce, Difficulty: request.Difficulty, Count: request.Count, Debug: request.Debug,
+		Nonce: request.Nonce, Difficulty: request.Difficulty, Count: request.Count,
 	}
 	result := new(AkamaiSecCPTResponse)
 	meta, err := s.client.doJSON(ctx, "POST", "/v1/solve/akamai", wire, result)

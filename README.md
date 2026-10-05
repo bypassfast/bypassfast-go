@@ -158,12 +158,16 @@ credentials.
 
 - JSON requests of at least 1 KiB are gzip-compressed when compression saves
   bytes. Configure or disable this with `WithCompressionThreshold`.
-- Decoded requests are rejected locally above the API's 1 MiB limit.
+- Decoded requests are rejected locally above the API's 1 MiB limit (2 MiB
+  for PerimeterX, whose hold requests carry the block page).
 - Responses are bounded to 4 MiB and gzip-decoded independent of the supplied
   HTTP transport.
 - Redirects are never followed, preventing `X-API-Key` from crossing origins.
-- The default HTTP timeout is 65 seconds. A custom `*http.Client` can be passed
-  with `WithHTTPClient`.
+- Each attempt is bounded by a per-route timeout: 65 seconds by default
+  (`WithTimeout`) and 155 seconds for PerimeterX (`WithPerimeterxTimeout`),
+  whose solves run a real press-and-hold and may queue. Bound a whole call,
+  retries included, with the context. A custom `*http.Client` can be passed
+  with `WithHTTPClient`; its own `Timeout`, if set, applies as well.
 - Custom non-loopback base URLs must use HTTPS.
 
 Never log request objects or successful solver responses. They can contain API
@@ -171,5 +175,11 @@ keys, proxy credentials, device sessions, target cookies, and challenge tokens.
 
 ## Releasing
 
-Releases are published from the SDK's mirror repository with standard semantic
-version tags such as `v0.1.0`. Keep the tag and `Version` constant aligned.
+Releases are tagged in this repository with standard semantic version tags
+such as `v0.2.1`; see [CHANGELOG.md](CHANGELOG.md). Keep the tag and the
+`Version` constant aligned. `v0.1.0` is retracted: it was a pre-release
+prototype with a different API surface.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -26,11 +26,17 @@ import (
 
 const (
 	// Version is the semantic version of this SDK.
-	Version = "0.2.0"
+	Version = "0.2.1"
 
 	defaultBaseURL              = "https://api.bypass.fast"
 	defaultCompressionThreshold = 1024
-	maxRequestBytes             = 1024 * 1024
+	// defaultTimeout bounds one attempt on every route except PerimeterX,
+	// just beyond the public edge's 60 s solver deadline. A PerimeterX solve
+	// runs a real press-and-hold and may wait in the solver's queue, so the
+	// edge allows it 150 s and the SDK follows with a longer per-attempt cap.
+	defaultTimeout           = 65 * time.Second
+	defaultPerimeterxTimeout = 155 * time.Second
+	maxRequestBytes          = 1024 * 1024
 	// PerimeterX holdcaptcha bodies carry the customer's HTML block page; the
 	// edge and the solver allow 2 MiB for that route only.
 	maxPerimeterxRequestBytes = 2 * 1024 * 1024
@@ -75,6 +81,8 @@ type RetryPolicy struct {
 type config struct {
 	baseURL               string
 	httpClient            *http.Client
+	timeout               time.Duration
+	perimeterxTimeout     time.Duration
 	retryPolicy           RetryPolicy
 	solverBusyRetryBudget time.Duration
 	compressionThreshold  int
@@ -95,13 +103,43 @@ func WithBaseURL(rawURL string) Option {
 
 // WithHTTPClient supplies the HTTP client used for all requests. The Client
 // value is copied, while its Transport and Jar remain shared and must not be
-// mutated while in use.
+// mutated while in use. The per-attempt timeouts (WithTimeout,
+// WithPerimeterxTimeout) apply through the request context, so leave the
+// client's own Timeout zero unless it should cap PerimeterX solves as well:
+// when both are set, the shorter one wins.
 func WithHTTPClient(client *http.Client) Option {
 	return func(cfg *config) error {
 		if client == nil {
 			return errors.New("bypassfast: HTTP client must not be nil")
 		}
 		cfg.httpClient = client
+		return nil
+	}
+}
+
+// WithTimeout sets the per-attempt timeout of every route except PerimeterX.
+// The default is 65 seconds, just beyond the public edge's solver deadline.
+// It covers connecting, the response headers and the body of one attempt;
+// bound a whole call, retries included, with the context.
+func WithTimeout(timeout time.Duration) Option {
+	return func(cfg *config) error {
+		if timeout <= 0 || timeout > maxRetryDelay {
+			return fmt.Errorf("bypassfast: timeout must be positive and at most %s", maxRetryDelay)
+		}
+		cfg.timeout = timeout
+		return nil
+	}
+}
+
+// WithPerimeterxTimeout sets the per-attempt timeout of the PerimeterX
+// routes. The default is 155 seconds: a solve runs a real press-and-hold and
+// may queue, and the edge allows it 150 seconds.
+func WithPerimeterxTimeout(timeout time.Duration) Option {
+	return func(cfg *config) error {
+		if timeout <= 0 || timeout > maxRetryDelay {
+			return fmt.Errorf("bypassfast: PerimeterX timeout must be positive and at most %s", maxRetryDelay)
+		}
+		cfg.perimeterxTimeout = timeout
 		return nil
 	}
 }
@@ -156,7 +194,7 @@ func WithCompressionThreshold(bytes int) Option {
 
 // WithUserAgent adds an application identifier after the SDK user agent.
 // For example, "checkout-service/2.4.0" becomes
-// "bypassfast-go/0.2.0 checkout-service/2.4.0".
+// "bypassfast-go/0.2.1 checkout-service/2.4.0".
 func WithUserAgent(application string) Option {
 	return func(cfg *config) error {
 		application = strings.TrimSpace(application)
@@ -173,6 +211,8 @@ type Client struct {
 	apiKey                string
 	baseURL               string
 	httpClient            *http.Client
+	timeout               time.Duration
+	perimeterxTimeout     time.Duration
 	retryPolicy           RetryPolicy
 	solverBusyRetryBudget time.Duration
 	compressionThreshold  int
@@ -185,8 +225,10 @@ type Client struct {
 	Perimeterx *PerimeterxService
 }
 
-// NewClient constructs a client using an API key. The default HTTP timeout is
-// 65 seconds, just beyond the public edge's solver deadline.
+// NewClient constructs a client using an API key. Each attempt is bounded by
+// a per-route timeout: 65 seconds by default, just beyond the public edge's
+// solver deadline, and 155 seconds for PerimeterX (WithTimeout,
+// WithPerimeterxTimeout).
 func NewClient(apiKey string, options ...Option) (*Client, error) {
 	if apiKey == "" {
 		return nil, errors.New("bypassfast: API key must not be empty")
@@ -196,10 +238,10 @@ func NewClient(apiKey string, options ...Option) (*Client, error) {
 	}
 
 	cfg := config{
-		baseURL: defaultBaseURL,
-		httpClient: &http.Client{
-			Timeout: 65 * time.Second,
-		},
+		baseURL:           defaultBaseURL,
+		httpClient:        &http.Client{},
+		timeout:           defaultTimeout,
+		perimeterxTimeout: defaultPerimeterxTimeout,
 		retryPolicy: RetryPolicy{
 			MaxRetries: 2,
 			BaseDelay:  500 * time.Millisecond,
@@ -233,6 +275,8 @@ func NewClient(apiKey string, options ...Option) (*Client, error) {
 		apiKey:                apiKey,
 		baseURL:               baseURL,
 		httpClient:            &httpClient,
+		timeout:               cfg.timeout,
+		perimeterxTimeout:     cfg.perimeterxTimeout,
 		retryPolicy:           cfg.retryPolicy,
 		solverBusyRetryBudget: cfg.solverBusyRetryBudget,
 		compressionThreshold:  cfg.compressionThreshold,
@@ -279,7 +323,11 @@ func (c *Client) Solve(ctx context.Context, solver Solver, request, response any
 	if response == nil || reflect.ValueOf(response).Kind() != reflect.Pointer || reflect.ValueOf(response).IsNil() {
 		return ResponseMeta{}, &ValidationError{Field: "response", Message: "must be a non-nil pointer"}
 	}
-	return c.doJSON(ctx, http.MethodPost, "/v1/solve/"+string(solver), request, response)
+	limit, timeout := maxRequestBytes, c.timeout
+	if solver == SolverPerimeterx {
+		limit, timeout = maxPerimeterxRequestBytes, c.perimeterxTimeout
+	}
+	return c.doJSONWithLimit(ctx, http.MethodPost, "/v1/solve/"+string(solver), request, response, limit, timeout)
 }
 
 func (s Solver) valid() bool {
@@ -292,11 +340,12 @@ func (s Solver) valid() bool {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, request, response any) (ResponseMeta, error) {
-	return c.doJSONWithLimit(ctx, method, path, request, response, maxRequestBytes)
+	return c.doJSONWithLimit(ctx, method, path, request, response, maxRequestBytes, c.timeout)
 }
 
-// doJSONWithLimit is doJSON with a route-specific encoded-body cap.
-func (c *Client) doJSONWithLimit(ctx context.Context, method, path string, request, response any, limit int) (ResponseMeta, error) {
+// doJSONWithLimit is doJSON with a route-specific encoded-body cap and
+// per-attempt timeout.
+func (c *Client) doJSONWithLimit(ctx context.Context, method, path string, request, response any, limit int, timeout time.Duration) (ResponseMeta, error) {
 	var payload []byte
 	var err error
 	if request != nil {
@@ -313,7 +362,7 @@ func (c *Client) doJSONWithLimit(ctx context.Context, method, path string, reque
 	if err != nil {
 		return ResponseMeta{}, err
 	}
-	return c.do(ctx, method, path, wirePayload, contentEncoding, response)
+	return c.do(ctx, method, path, wirePayload, contentEncoding, timeout, response)
 }
 
 func (c *Client) encodeRequest(payload []byte, limit int) ([]byte, string, error) {
@@ -341,11 +390,11 @@ func (c *Client) encodeRequest(payload []byte, limit int) ([]byte, string, error
 	return compressed.Bytes(), "gzip", nil
 }
 
-func (c *Client) do(ctx context.Context, method, path string, body []byte, contentEncoding string, response any) (ResponseMeta, error) {
+func (c *Client) do(ctx context.Context, method, path string, body []byte, contentEncoding string, timeout time.Duration, response any) (ResponseMeta, error) {
 	started := time.Now()
 	retries, busyRetries := 0, 0
 	for attempt := 1; ; attempt++ {
-		meta, payload, err := c.attempt(ctx, method, path, body, contentEncoding, attempt)
+		meta, payload, err := c.attempt(ctx, method, path, body, contentEncoding, timeout, attempt)
 		if err == nil {
 			if response == nil || len(payload) == 0 {
 				return meta, nil
@@ -398,7 +447,14 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, conte
 	}
 }
 
-func (c *Client) attempt(ctx context.Context, method, path string, body []byte, contentEncoding string, attempt int) (ResponseMeta, []byte, error) {
+// attempt performs one HTTP exchange. timeout bounds the whole exchange,
+// response body included, on top of the caller's context.
+func (c *Client) attempt(ctx context.Context, method, path string, body []byte, contentEncoding string, timeout time.Duration, attempt int) (ResponseMeta, []byte, error) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
