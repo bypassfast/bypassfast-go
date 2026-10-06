@@ -299,3 +299,36 @@ func TestTypedModesSendCanonicalContracts(t *testing.T) {
 		})
 	}
 }
+
+// Pace is sent only when set: the API then holds the response until a
+// person's interval has passed since the previous sensor.
+func TestAkamaiSensorSendsPaceOnlyWhenSet(t *testing.T) {
+	var mu sync.Mutex
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		mu.Lock()
+		requests = append(requests, body)
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{"cost":0.002,"success":true,"sensor_data":"sensor","ua":"ua","session":"next"}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithCompressionThreshold(-1))
+	for _, pace := range []bool{false, true} {
+		request := &AkamaiSensorRequest{URL: "https://example.com", ScriptURL: "https://example.com/a.js", Session: "prior", Pace: pace}
+		if _, err := client.Akamai.Sensor(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if _, sent := requests[0]["pace"]; sent {
+		t.Fatalf("unpaced request = %#v", requests[0])
+	}
+	if requests[1]["pace"] != true {
+		t.Fatalf("paced request = %#v", requests[1])
+	}
+}

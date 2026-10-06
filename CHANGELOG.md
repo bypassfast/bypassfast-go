@@ -3,6 +3,12 @@
 All notable changes to the Bypass Fast Go SDK are recorded here. The module
 follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Akamai: `AkamaiSensorRequest.Pace` asks the API to hold each sensor
+  response until a person's interval (2.5-4 s) has passed since the
+  previous sensor.
+
 ## 0.2.1 - 2026-10-05
 
 - PerimeterX calls get their own per-attempt timeout, 155 s by default

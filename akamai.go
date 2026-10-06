@@ -14,7 +14,11 @@ type AkamaiService struct {
 }
 
 // AkamaiSensorRequest generates Bot Manager sensor_data. Script contains raw
-// JavaScript bytes; the SDK performs the required base64 encoding.
+// JavaScript bytes; the SDK performs the required base64 encoding. Set Pace
+// on the calls after the first to have each response held until a person's
+// interval (2.5-4 s) has passed since the previous sensor: a page posts
+// seconds apart, and sites score sessions whose sensors arrive a fraction
+// of a second apart. A client that spaces its own calls does not need it.
 type AkamaiSensorRequest struct {
 	URL            string
 	UserAgent      string
@@ -27,6 +31,7 @@ type AkamaiSensorRequest struct {
 	Language       string
 	Timezone       string
 	Session        string
+	Pace           bool
 }
 
 // AkamaiSensorResponse contains the artifact and exact client identity that
@@ -55,6 +60,7 @@ type akamaiSensorWire struct {
 	Language       string `json:"language,omitempty"`
 	Timezone       string `json:"timezone,omitempty"`
 	Session        string `json:"session,omitempty"`
+	Pace           bool   `json:"pace,omitempty"`
 }
 
 // Sensor generates Akamai Bot Manager sensor_data. After a successful
@@ -75,6 +81,7 @@ func (s *AkamaiService) Sensor(ctx context.Context, request *AkamaiSensorRequest
 		Language:       request.Language,
 		Timezone:       request.Timezone,
 		Session:        request.Session,
+		Pace:           request.Pace,
 	}
 
 	var scriptID string
