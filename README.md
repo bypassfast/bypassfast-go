@@ -78,6 +78,15 @@ process, set both `ScriptID` and `Script`: the ID is tried first and the raw
 bytes are retained only for cache-miss fallback. `AkamaiScriptID` computes the
 ID locally when needed.
 
+### Akamai sensor pacing
+
+A page posts its sensors seconds apart, and protected endpoints score a
+session whose sensors arrive a fraction of a second apart. Either wait
+2.5-4 s between the sensor calls of one session, or set
+`AkamaiSensorRequest.Pace` on them: the API then holds each continuation
+response until that interval has passed (never more than 6 s, never the
+first call), and the call simply takes longer.
+
 ### Incapsula script handling
 
 The client remembers the SHA-256 associated with each successful mode and full
