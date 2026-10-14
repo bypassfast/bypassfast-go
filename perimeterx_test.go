@@ -64,6 +64,7 @@ func TestPerimeterxInitAndHoldWire(t *testing.T) {
 			Body:       "eyJhcHBJZCI6IlBYYWJjIn0=",
 			BodyBase64: true,
 		},
+		Cookies: []PerimeterxCookie{{Name: "_abck", Value: "a", Domain: ".example.com", Path: "/"}, {Name: "_pxhd", Value: "h"}},
 	})
 	if err != nil || holdResult.Success || !holdResult.Rejected() || holdResult.ChangeExit() || holdResult.Retry != nil {
 		t.Fatalf("hold = %#v, %v", holdResult, err)
@@ -94,6 +95,41 @@ func TestPerimeterxInitAndHoldWire(t *testing.T) {
 	}
 	if _, present := holdWire["ua"]; present {
 		t.Fatalf("hold wire carried an empty ua: %#v", holdWire)
+	}
+	// The cookies held at the block travel with the hold, HUMAN's included.
+	holdCookies, ok := holdWire["cookies"].([]any)
+	if !ok || len(holdCookies) != 2 {
+		t.Fatalf("hold wire cookies = %#v", holdWire["cookies"])
+	}
+	if first, _ := holdCookies[0].(map[string]any); first["name"] != "_abck" || first["domain"] != ".example.com" {
+		t.Fatalf("hold wire cookies[0] = %#v", holdCookies[0])
+	}
+	if second, _ := holdCookies[1].(map[string]any); second["name"] != "_pxhd" {
+		t.Fatalf("hold wire cookies[1] = %#v", holdCookies[1])
+	}
+}
+
+// A hold without cookies is sent without a cookies key: the solver then
+// keeps its own jar and refreshes the page before the hold.
+func TestPerimeterxHoldWithoutCookiesOmitsTheKey(t *testing.T) {
+	var wire map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&wire)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"cookies":[],"session":"sess-2","cost":0.004}`))
+	}))
+	defer server.Close()
+	client, err := NewClient("bf_test_key", WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Perimeterx.SolveHold(context.Background(), &PerimeterxHoldRequest{
+		Session: "s", Proxy: "http://u:p@h:1", Blocked: &PerimeterxBlockedResponse{URL: "https://www.example.com/api", Status: 428, Body: "{}"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := wire["cookies"]; present {
+		t.Fatalf("hold wire carried an empty cookies key: %#v", wire)
 	}
 }
 

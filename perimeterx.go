@@ -106,6 +106,14 @@ type PerimeterxHoldRequest struct {
 	// Headers describe the blocked request context (referer, origin), lower
 	// case names.
 	Headers map[string]string
+	// Cookies are the cookies you hold for the site at the block: the set
+	// the blocked request carried, HUMAN's included. Send them: the solver
+	// lays them over its session jar so the hold runs with the site's
+	// current session and the other protection layers, the way the
+	// browser's would, and then returns only HUMAN's cookies and the ones
+	// the hold set or changed. Without them the solver refreshes the page
+	// itself before the hold.
+	Cookies []PerimeterxCookie
 }
 
 // PerimeterxRetryAdvice tells the caller how to proceed after a rejected hold.
@@ -231,6 +239,7 @@ func (s *PerimeterxService) SolveHold(ctx context.Context, request *PerimeterxHo
 		Proxy:     request.Proxy,
 		UserAgent: request.UserAgent,
 		Headers:   request.Headers,
+		Cookies:   append([]PerimeterxCookie(nil), request.Cookies...),
 		Session:   request.Session,
 		Blocked:   blocked,
 	}

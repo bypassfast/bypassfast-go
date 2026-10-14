@@ -100,8 +100,9 @@ the supplied script automatically.
 your own requests through the same proxy with the same user agent and
 language. If a request comes back as a HUMAN block (JSON `428` with
 `appId`/`blockScript`, or an HTML page containing `px-captcha`), call
-`SolveHold` with the `Session` from `Init` and the response exactly as
-received, then set the new cookies and retry once.
+`SolveHold` with the `Session` from `Init`, the response exactly as
+received and the cookies you hold for the site at that point, then set the
+returned cookies and retry once.
 
 ```go
 session, err := client.Perimeterx.Init(ctx, &bypassfast.PerimeterxInitRequest{
@@ -116,6 +117,7 @@ hold, err := client.Perimeterx.SolveHold(ctx, &bypassfast.PerimeterxHoldRequest{
 	Blocked: &bypassfast.PerimeterxBlockedResponse{
 		URL: blockedURL, Method: "POST", Status: 428, Headers: blockedHeaders, Body: blockedBody,
 	},
+	Cookies: cookiesHeldAtTheBlock, // your jar for the site, HUMAN's cookies included
 })
 if err == nil && !hold.Success {
 	// Stop. A rejected hold is billed and may reflect an app-wide HUMAN rule.
