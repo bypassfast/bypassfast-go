@@ -78,6 +78,19 @@ process, set both `ScriptID` and `Script`: the ID is tried first and the raw
 bytes are retained only for cache-miss fallback. `AkamaiScriptID` computes the
 ID locally when needed.
 
+### Akamai SBSD on a normal page
+
+A normal `200` page can run SBSD too: a first-party script whose URL carries
+`?v=` sits next to the sensor script, and the page response sets `bm_so`. Post
+it as part of the page, before any protected request: after the first sensor
+post, call `client.Akamai.SBSD` with the sensor's `Session` and `SBSDO` set to
+the `bm_so` value, POST `{"body": ...}` to the script path without its query,
+continue the sensor with the `Session` it returned, then ask for the two
+telemetry posts with `Post: "telemetry"` (wait `WaitMS`, or set `Pace`). The
+full order is on the [SBSD docs page](https://bypass.fast/docs/solvers/akamai/sbsd#inline-sbsd-on-a-normal-page).
+A client that skips it still gets a valid `_abck`, and the protected endpoint
+answers `403` instead.
+
 ### Akamai sensor pacing
 
 A page posts its sensors seconds apart, and protected endpoints score a
