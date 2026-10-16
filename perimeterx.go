@@ -51,8 +51,8 @@ type PerimeterxInitRequest struct {
 	UserAgent string
 	// AcceptLanguage defaults to "en-US,en;q=0.9".
 	AcceptLanguage string
-	// Timezone is an IANA zone matching the exit's region (default
-	// America/New_York).
+	// Timezone is ignored by the PerimeterX solver: it draws the session's
+	// zone from AcceptLanguage's region, spread across that region's zones.
 	Timezone string
 	// Platform defaults to chrome-windows and must agree with UserAgent when
 	// one is sent.
