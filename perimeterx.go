@@ -49,10 +49,13 @@ type PerimeterxInitRequest struct {
 	// the user agent it used in PerimeterxResponse.UserAgent; send your own
 	// requests with that value.
 	UserAgent string
-	// AcceptLanguage defaults to "en-US,en;q=0.9".
+	// AcceptLanguage is the Accept-Language your own requests send; the
+	// session keeps it. When empty the solver draws a real Chrome value for
+	// the proxy exit's country and returns it in
+	// PerimeterxResponse.AcceptLanguage.
 	AcceptLanguage string
-	// Timezone is ignored by the PerimeterX solver: it draws the session's
-	// zone from AcceptLanguage's region, spread across that region's zones.
+	// Timezone is ignored by the PerimeterX solver: it takes the session's
+	// zone from where the exit is.
 	Timezone string
 	// Platform defaults to chrome-windows and must agree with UserAgent when
 	// one is sent.
@@ -137,9 +140,14 @@ type PerimeterxResponse struct {
 	// one you sent, or the build the solver drew when you sent none. Send
 	// every request for this session (and the blocked response you forward
 	// to SolveHold) with exactly this value.
-	UserAgent string       `json:"ua,omitempty"`
-	Cost      float64      `json:"cost"`
-	Response  ResponseMeta `json:"-"`
+	UserAgent string `json:"ua,omitempty"`
+	// AcceptLanguage is the Accept-Language the session runs as: the one you
+	// sent to Init, or the value the solver drew for the proxy exit's
+	// country when you sent none. Send every request for this session with
+	// exactly this value.
+	AcceptLanguage string       `json:"accept_language,omitempty"`
+	Cost           float64      `json:"cost"`
+	Response       ResponseMeta `json:"-"`
 }
 
 // Rejected reports whether the hold was rejected.
@@ -202,7 +210,11 @@ func (s *PerimeterxService) Init(ctx context.Context, request *PerimeterxInitReq
 		Cookies:        append([]PerimeterxCookie(nil), request.Cookies...),
 		AppID:          request.AppID,
 	}
-	return s.solve(ctx, wire)
+	result, err := s.solve(ctx, wire)
+	if err == nil && result != nil && result.AcceptLanguage == "" {
+		result.AcceptLanguage = request.AcceptLanguage
+	}
+	return result, err
 }
 
 // SolveHold solves the press-and-hold challenge behind a blocked response

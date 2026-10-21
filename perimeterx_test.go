@@ -157,6 +157,41 @@ func TestPerimeterxInitWithoutUserAgentAdoptsTheSolverDraw(t *testing.T) {
 	}
 }
 
+// An init without Accept-Language is sent without the key and returns the
+// value the solver drew; one with it keeps the caller's own even when the
+// API does not echo it.
+func TestPerimeterxInitAdoptsTheSessionAcceptLanguage(t *testing.T) {
+	var wires []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var wire map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		wires = append(wires, wire)
+		if _, sent := wire["accept_language"]; sent {
+			_, _ = io.WriteString(w, `{"success":true,"cookies":[],"session":"s","cost":0.004}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"success":true,"cookies":[],"session":"s","accept_language":"en-GB,en;q=0.9","cost":0.004}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithCompressionThreshold(-1))
+	drawn, err := client.Perimeterx.Init(context.Background(), &PerimeterxInitRequest{URL: "https://www.example.com/", Proxy: "socks5h://user:pass@host:1080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := wires[0]["accept_language"]; present || drawn.AcceptLanguage != "en-GB,en;q=0.9" {
+		t.Fatalf("drawn init: wire %#v, result %q", wires[0], drawn.AcceptLanguage)
+	}
+	own, err := client.Perimeterx.Init(context.Background(), &PerimeterxInitRequest{URL: "https://www.example.com/", Proxy: "socks5h://user:pass@host:1080", AcceptLanguage: "tr-TR,tr;q=0.9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wires[1]["accept_language"] != "tr-TR,tr;q=0.9" || own.AcceptLanguage != "tr-TR,tr;q=0.9" {
+		t.Fatalf("own init: wire %#v, result %q", wires[1], own.AcceptLanguage)
+	}
+}
+
 func TestPerimeterxValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("request reached the server")

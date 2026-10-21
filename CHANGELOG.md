@@ -5,6 +5,11 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- PerimeterX: `PerimeterxResponse.AcceptLanguage` is the Accept-Language the
+  session runs as. Without `AcceptLanguage` in `Init` the API draws a real
+  Chrome value for the proxy exit's country; the SDK keeps your own value
+  when you set one. Send every request of the session with `UserAgent` and
+  `AcceptLanguage`.
 - Akamai: `AkamaiSensorRequest.Pace` asks the API to hold each sensor
   response until a person's interval (2.5-4 s) has passed since the
   previous sensor.
