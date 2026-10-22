@@ -192,6 +192,28 @@ func TestPerimeterxInitAdoptsTheSessionAcceptLanguage(t *testing.T) {
 	}
 }
 
+func TestPerimeterxInitPlatformAutoReturnsTheDraw(t *testing.T) {
+	var wire map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_, _ = io.WriteString(w, `{"success":true,"cookies":[],"session":"sess-4","ua":"Mozilla/5.0 (Macintosh) Chrome/155.0.0.0","platform":"chrome-mac","cost":0.004}`)
+	}))
+	defer server.Close()
+	client := newTestClient(t, server, WithCompressionThreshold(-1))
+	result, err := client.Perimeterx.Init(context.Background(), &PerimeterxInitRequest{URL: "https://www.example.com/", Proxy: "socks5h://user:pass@host:1080", Platform: PerimeterxPlatformAuto})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire["platform"] != "auto" {
+		t.Fatalf("init wire platform = %#v", wire["platform"])
+	}
+	if result.Platform != PerimeterxPlatformChromeMac || result.UserAgent != "Mozilla/5.0 (Macintosh) Chrome/155.0.0.0" {
+		t.Fatalf("init = %#v", result)
+	}
+}
+
 func TestPerimeterxValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("request reached the server")

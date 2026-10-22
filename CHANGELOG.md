@@ -10,6 +10,10 @@ follows [Semantic Versioning](https://semver.org/).
   Chrome value for the proxy exit's country; the SDK keeps your own value
   when you set one. Send every request of the session with `UserAgent` and
   `AcceptLanguage`.
+- PerimeterX: `PerimeterxPlatformAuto` on `PerimeterxInitRequest.Platform`
+  has the solver draw each session's platform (Windows or macOS) and,
+  without `UserAgent`, a current Chrome major;
+  `PerimeterxResponse.Platform` reports the draw.
 - Akamai: `AkamaiSensorRequest.Pace` asks the API to hold each sensor
   response until a person's interval (2.5-4 s) has passed since the
   previous sensor.

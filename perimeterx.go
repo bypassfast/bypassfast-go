@@ -20,6 +20,12 @@ type PerimeterxPlatform string
 const (
 	PerimeterxPlatformChromeWindows PerimeterxPlatform = "chrome-windows"
 	PerimeterxPlatformChromeMac     PerimeterxPlatform = "chrome-mac"
+	// PerimeterxPlatformAuto (init only) has the solver draw the platform
+	// (Windows or macOS) and, when UserAgent is empty, a current Chrome major
+	// per session; PerimeterxResponse.Platform and UserAgent report the
+	// draw. Send it only through exits that fit both Windows and macOS
+	// clients; pin the platform on an exit of one OS class.
+	PerimeterxPlatformAuto PerimeterxPlatform = "auto"
 )
 
 // PerimeterxCookie is a cookie to install before the page fetch, or one the
@@ -58,7 +64,7 @@ type PerimeterxInitRequest struct {
 	// zone from where the exit is.
 	Timezone string
 	// Platform defaults to chrome-windows and must agree with UserAgent when
-	// one is sent.
+	// one is sent. PerimeterxPlatformAuto draws it per session.
 	Platform PerimeterxPlatform
 	// Referer is the navigation referrer for the page fetch.
 	Referer string
@@ -145,9 +151,13 @@ type PerimeterxResponse struct {
 	// sent to Init, or the value the solver drew for the proxy exit's
 	// country when you sent none. Send every request for this session with
 	// exactly this value.
-	AcceptLanguage string       `json:"accept_language,omitempty"`
-	Cost           float64      `json:"cost"`
-	Response       ResponseMeta `json:"-"`
+	AcceptLanguage string `json:"accept_language,omitempty"`
+	// Platform is the platform the session runs as (chrome-windows or
+	// chrome-mac): the request's, or the solver's draw for auto. Your
+	// client hints and TLS stack must match it.
+	Platform PerimeterxPlatform `json:"platform,omitempty"`
+	Cost     float64            `json:"cost"`
+	Response ResponseMeta       `json:"-"`
 }
 
 // Rejected reports whether the hold was rejected.
