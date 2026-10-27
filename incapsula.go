@@ -10,10 +10,12 @@ type IncapsulaService struct {
 }
 
 // IncapsulaReese84Request generates a Reese84 sensor payload. Script is raw
-// JavaScript and is omitted automatically after this Client has registered the
-// same content at the same ScriptURL.
+// JavaScript; the SDK sends only its SHA-256 as script_id and uploads the
+// script once, only when the API has never seen it. ScriptID may be set
+// instead of Script when the source is not at hand.
 type IncapsulaReese84Request struct {
 	Script         string
+	ScriptID       string
 	UserAgent      string
 	ScriptURL      string
 	URL            string
@@ -34,9 +36,11 @@ type IncapsulaReese84Request struct {
 	DocumentScriptSourceGroups [][]string
 }
 
-// IncapsulaUTMVCRequest generates the ___utmvc cookie workflow.
+// IncapsulaUTMVCRequest generates the ___utmvc cookie workflow. Script
+// travels as its script_id like Reese84.
 type IncapsulaUTMVCRequest struct {
 	Script         string
+	ScriptID       string
 	UserAgent      string
 	ScriptURL      string
 	URL            string
@@ -49,22 +53,29 @@ type IncapsulaUTMVCRequest struct {
 
 // IncapsulaResponse contains fields shared by Reese84 and UTMVC. UTMVC fills
 // Cookie, CookieName, and SubmitPath; Reese84 fills DeviceID and Session.
+// ScriptID is the digest of the script the solve used. ClientHints are the
+// UA client hints of the device: send the low-entropy ones (sec-ch-ua,
+// sec-ch-ua-mobile, sec-ch-ua-platform) on every request and the others only
+// to sites whose Accept-CH header asks for them.
 type IncapsulaResponse struct {
-	Cost       float64      `json:"cost"`
-	Payload    string       `json:"payload"`
-	Backend    string       `json:"backend"`
-	DeviceID   string       `json:"device_id,omitempty"`
-	Session    string       `json:"session,omitempty"`
-	DurationMS int64        `json:"duration_ms"`
-	Cookie     string       `json:"cookie,omitempty"`
-	CookieName string       `json:"cookie_name,omitempty"`
-	SubmitPath string       `json:"submit_path,omitempty"`
-	Response   ResponseMeta `json:"-"`
+	Cost        float64           `json:"cost"`
+	Payload     string            `json:"payload"`
+	Backend     string            `json:"backend"`
+	DeviceID    string            `json:"device_id,omitempty"`
+	Session     string            `json:"session,omitempty"`
+	ScriptID    string            `json:"script_id,omitempty"`
+	ClientHints map[string]string `json:"client_hints,omitempty"`
+	DurationMS  int64             `json:"duration_ms"`
+	Cookie      string            `json:"cookie,omitempty"`
+	CookieName  string            `json:"cookie_name,omitempty"`
+	SubmitPath  string            `json:"submit_path,omitempty"`
+	Response    ResponseMeta      `json:"-"`
 }
 
 type incapsulaWire struct {
 	Mode                       string            `json:"mode"`
 	Script                     string            `json:"script,omitempty"`
+	ScriptID                   string            `json:"script_id,omitempty"`
 	UserAgent                  string            `json:"ua"`
 	ScriptURL                  string            `json:"script_url"`
 	URL                        string            `json:"url"`
@@ -86,7 +97,6 @@ func (s *IncapsulaService) Reese84(ctx context.Context, request *IncapsulaReese8
 	}
 	wire := incapsulaWire{
 		Mode:                       "reese84",
-		Script:                     request.Script,
 		UserAgent:                  request.UserAgent,
 		ScriptURL:                  request.ScriptURL,
 		URL:                        request.URL,
@@ -99,7 +109,7 @@ func (s *IncapsulaService) Reese84(ctx context.Context, request *IncapsulaReese8
 		DocumentHTML:               request.DocumentHTML,
 		DocumentScriptSourceGroups: cloneIncapsulaStringGroups(request.DocumentScriptSourceGroups),
 	}
-	return s.solve(ctx, wire)
+	return s.solve(ctx, wire, request.Script, request.ScriptID)
 }
 
 func cloneIncapsulaStringGroups(groups [][]string) [][]string {
@@ -120,7 +130,6 @@ func (s *IncapsulaService) UTMVC(ctx context.Context, request *IncapsulaUTMVCReq
 	}
 	wire := incapsulaWire{
 		Mode:           "utmvc",
-		Script:         request.Script,
 		UserAgent:      request.UserAgent,
 		ScriptURL:      request.ScriptURL,
 		URL:            request.URL,
@@ -130,38 +139,40 @@ func (s *IncapsulaService) UTMVC(ctx context.Context, request *IncapsulaUTMVCReq
 		Headers:        request.Headers,
 		SessionIDs:     request.SessionIDs,
 	}
-	return s.solve(ctx, wire)
+	return s.solve(ctx, wire, request.Script, request.ScriptID)
 }
 
-func (s *IncapsulaService) solve(ctx context.Context, wire incapsulaWire) (*IncapsulaResponse, error) {
-	fullScript := wire.Script
-	cacheKey := "incapsula:" + wire.Mode + ":" + wire.ScriptURL
-	scriptHash := ""
-	usedCompactScript := false
-	if fullScript != "" {
-		scriptHash = sha256Hex([]byte(fullScript))
-		usedCompactScript = s.client.scripts.matches(cacheKey, scriptHash)
-		if usedCompactScript {
-			wire.Script = ""
-		}
+// solve sends the script hash-first. Without a script or a script_id the
+// request is still sent: the API resolves a known script_url on its own and
+// answers 409 script_cache_miss when it cannot.
+func (s *IncapsulaService) solve(ctx context.Context, wire incapsulaWire, script, explicitID string) (*IncapsulaResponse, error) {
+	scriptID, err := resolveScriptID(explicitID, []byte(script))
+	if err != nil {
+		return nil, err
 	}
-
+	wire.ScriptID = scriptID
 	result := new(IncapsulaResponse)
-	meta, err := s.client.doJSON(ctx, "POST", "/v1/solve/incapsula", wire, result)
-	if err != nil && usedCompactScript &&
-		(IsErrorCode(err, "script_cache_miss") || IsErrorCode(err, "script_cache_unavailable")) {
-		priorAttempts := meta.Attempts
-		wire.Script = fullScript
-		result = new(IncapsulaResponse)
-		meta, err = s.client.doJSON(ctx, "POST", "/v1/solve/incapsula", wire, result)
-		applyFallbackAttempts(&meta, err, priorAttempts)
-	}
+	meta, err := s.client.solveScript(ctx, scriptExchange{
+		path:        "/v1/solve/incapsula",
+		key:         "incapsula:" + wire.Mode + ":" + scriptID,
+		hasScript:   script != "",
+		scriptBytes: len(script),
+		build: func(withScript bool) any {
+			out := wire
+			if withScript {
+				out.Script = script
+			}
+			return out
+		},
+		limit:   maxRequestBytes,
+		timeout: s.client.timeout,
+	}, result)
 	if err != nil {
 		return nil, err
 	}
 	result.Response = meta
-	if scriptHash != "" {
-		s.client.scripts.put(cacheKey, scriptHash)
+	if result.ScriptID == "" {
+		result.ScriptID = scriptID
 	}
 	return result, nil
 }

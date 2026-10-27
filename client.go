@@ -1,8 +1,10 @@
 // Package bypassfast provides an idiomatic client for the Bypass Fast API.
 //
-// A Client is safe for concurrent use. It automatically compresses large
-// requests, decodes compressed responses, retries explicitly non-billable
-// transient API failures, and exposes request IDs for support and tracing.
+// A Client is safe for concurrent use. It sends every challenge script as its
+// SHA-256 and uploads the script only when the API has never seen it,
+// automatically compresses large requests, decodes compressed responses,
+// retries explicitly non-billable transient API failures, and exposes request
+// IDs for support and tracing.
 package bypassfast
 
 import (
@@ -26,7 +28,7 @@ import (
 
 const (
 	// Version is the semantic version of this SDK.
-	Version = "0.2.1"
+	Version = "0.3.0"
 
 	defaultBaseURL              = "https://api.bypass.fast"
 	defaultCompressionThreshold = 1024
@@ -194,7 +196,7 @@ func WithCompressionThreshold(bytes int) Option {
 
 // WithUserAgent adds an application identifier after the SDK user agent.
 // For example, "checkout-service/2.4.0" becomes
-// "bypassfast-go/0.2.1 checkout-service/2.4.0".
+// "bypassfast-go/0.3.0 checkout-service/2.4.0".
 func WithUserAgent(application string) Option {
 	return func(cfg *config) error {
 		application = strings.TrimSpace(application)

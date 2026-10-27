@@ -156,8 +156,13 @@ type PerimeterxResponse struct {
 	// chrome-mac): the request's, or the solver's draw for auto. Your
 	// client hints and TLS stack must match it.
 	Platform PerimeterxPlatform `json:"platform,omitempty"`
-	Cost     float64            `json:"cost"`
-	Response ResponseMeta       `json:"-"`
+	// ClientHints are the UA client hints the session sends: send sec-ch-ua,
+	// sec-ch-ua-mobile and sec-ch-ua-platform on every request of the
+	// session, and the others only to sites whose Accept-CH header asks for
+	// them.
+	ClientHints map[string]string `json:"client_hints,omitempty"`
+	Cost        float64           `json:"cost"`
+	Response    ResponseMeta      `json:"-"`
 }
 
 // Rejected reports whether the hold was rejected.

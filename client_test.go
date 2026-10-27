@@ -60,10 +60,13 @@ func TestClientCompressesRequestsAndDecodesResponses(t *testing.T) {
 	defer server.Close()
 
 	client := newTestClient(t, server, WithUserAgent("checkout/1.0"))
+	// The script travels as its hash; a long referrer makes the body worth
+	// compressing.
 	result, err := client.Kasada.Sensor(context.Background(), &KasadaSensorRequest{
-		Script:         strings.Repeat("var challenge = 1;", 200),
+		Script:         "var challenge = 1;",
 		UserAgent:      "ua-in",
 		AcceptLanguage: "en-US",
+		Referrer:       "https://example.com/" + strings.Repeat("path/", 400),
 	})
 	if err != nil {
 		t.Fatal(err)

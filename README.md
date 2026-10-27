@@ -66,17 +66,42 @@ so deadlines and cancellation flow through to the API.
 `client.Balance` reads prepaid USD balance. `client.Solve` is a typed escape
 hatch for newly added request fields, but the service methods are preferred.
 
-### Akamai script handling
+### Script handling
 
-Pass raw JavaScript bytes in `AkamaiSensorRequest.Script` and
-`AkamaiSBSDRequest.Script`; the SDK applies the base64 encoding required by the
-API. After a sensor script succeeds, the client remembers only its SHA-256 and
-uses `script_id` for later fresh sessions. If the server-side entry expired, it
-automatically resends the supplied script once. Persist the returned
-`ScriptID` if a new process should try the compact form immediately. On a new
-process, set both `ScriptID` and `Script`: the ID is tried first and the raw
-bytes are retained only for cache-miss fallback. `AkamaiScriptID` computes the
-ID locally when needed.
+Every script-bearing call (Akamai sensor and SBSD, Kasada sensor and CD,
+Incapsula Reese84 and UTMVC) travels hash-first: the request carries the
+script's SHA-256 as `script_id` and no script. The API keeps every script it
+has been sent for days, so the body is only needed when nobody has sent that
+script yet; the API then answers `409 script_cache_miss` (not billed) and the
+SDK repeats the call once with the script. A new script version costs one
+extra round trip, once, fleet-wide: an Akamai sensor request is about 1 KB
+on the wire instead of hundreds of KB, a Kasada one about 1 KB instead of
+700 KB. After a miss the client sends the script directly for a minute, so a
+burst of solves for a brand-new script uploads it once.
+
+Keep passing the script exactly as today: raw bytes in
+`AkamaiSensorRequest.Script` and `AkamaiSBSDRequest.Script` (the SDK applies
+the base64 encoding the API requires), raw text in the Kasada and Incapsula
+requests. When the script is not at hand, set `ScriptID` instead (every
+script-bearing response returns it, and `ScriptID(raw)` computes it); a cache
+miss is then returned as the `APIError`. A script the API could never accept
+(over 1 MiB encoded) is refused locally before any round trip.
+
+### Client hints
+
+Every solve returns `ClientHints`: the UA client hints of the device the
+payload describes, as Chrome sends them. Send `sec-ch-ua`, `sec-ch-ua-mobile`
+and `sec-ch-ua-platform` on every request of the session, and the other
+hints (`sec-ch-ua-platform-version`, `sec-ch-ua-full-version-list`, ...)
+only to sites whose `Accept-CH` response header asks for them. The map's
+iteration order is not the header order.
+
+### Akamai telemetry header
+
+Some sites protect their API calls with an `Akamai-BM-Telemetry` request
+header instead of a sensor post. Set `AkamaiSensorRequest.Telemetry` and
+the response carries the ready-to-send header value in `Telemetry`, beside
+`SensorData`.
 
 ### Akamai SBSD on a normal page
 
@@ -102,13 +127,6 @@ session whose sensors arrive a fraction of a second apart. Either wait
 `AkamaiSensorRequest.Pace` on them: the API then holds each continuation
 response until that interval has passed (never more than 6 s, never the
 first call), and the call simply takes longer.
-
-### Incapsula script handling
-
-The client remembers the SHA-256 associated with each successful mode and full
-script URL. Repeated identical scripts use the URL-only cache path. Changed
-bytes at the same URL are sent in full, and remote cache misses fall back to
-the supplied script automatically.
 
 ### PerimeterX flow
 

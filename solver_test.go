@@ -12,7 +12,10 @@ import (
 	"testing"
 )
 
-func TestAkamaiSensorScriptReuseAndFallback(t *testing.T) {
+// A fresh client sends the script hash-first; the API's first sighting of
+// the script is one 409 and one resend, and every later call for the same
+// script is compact again.
+func TestAkamaiSensorHashFirstAndFallback(t *testing.T) {
 	var mu sync.Mutex
 	var requests []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,12 +27,12 @@ func TestAkamaiSensorScriptReuseAndFallback(t *testing.T) {
 		requests = append(requests, body)
 		call := len(requests)
 		mu.Unlock()
-		if call == 2 {
+		if call == 1 {
 			w.WriteHeader(http.StatusConflict)
 			_, _ = io.WriteString(w, `{"error_code":"script_cache_miss"}`)
 			return
 		}
-		_, _ = io.WriteString(w, `{"cost":0.002,"success":true,"sensor_data":"sensor","ua":"ua","session":"session","script_id":"server-id"}`)
+		_, _ = io.WriteString(w, `{"cost":0.002,"success":true,"sensor_data":"sensor","ua":"ua","session":"session","script_id":"server-id","client_hints":{"sec-ch-ua":"\"Chromium\";v=\"155\"","sec-ch-ua-mobile":"?0"}}`)
 	}))
 	defer server.Close()
 	client := newTestClient(t, server, WithCompressionThreshold(-1))
@@ -37,11 +40,14 @@ func TestAkamaiSensorScriptReuseAndFallback(t *testing.T) {
 	request := &AkamaiSensorRequest{URL: "https://example.com", Script: script, ScriptURL: "https://example.com/a.js"}
 
 	first, err := client.Akamai.Sensor(context.Background(), request)
-	if err != nil || first.SensorData != "sensor" {
+	if err != nil || first.SensorData != "sensor" || first.Response.Attempts != 2 {
 		t.Fatalf("first = %#v, %v", first, err)
 	}
+	if first.ClientHints["sec-ch-ua-mobile"] != "?0" || first.ClientHints["sec-ch-ua"] != `"Chromium";v="155"` {
+		t.Fatalf("client hints = %#v", first.ClientHints)
+	}
 	second, err := client.Akamai.Sensor(context.Background(), request)
-	if err != nil || second.Response.Attempts != 2 {
+	if err != nil || second.Response.Attempts != 1 {
 		t.Fatalf("second = %#v, %v", second, err)
 	}
 	mu.Lock()
@@ -53,16 +59,19 @@ func TestAkamaiSensorScriptReuseAndFallback(t *testing.T) {
 		if _, exists := request["config"]; exists {
 			t.Fatal("sensor request included config")
 		}
+		if request["script_id"] != sha256Hex(script) {
+			t.Fatalf("script_id = %#v", request["script_id"])
+		}
 	}
 	wantScript := base64.StdEncoding.EncodeToString(script)
-	if requests[0]["script"] != wantScript || requests[0]["script_id"] != sha256Hex(script) {
-		t.Fatalf("first request = %#v", requests[0])
+	if _, exists := requests[0]["script"]; exists {
+		t.Fatalf("hash-first request uploaded the script: %#v", requests[0])
 	}
-	if _, exists := requests[1]["script"]; exists || requests[1]["script_id"] != sha256Hex(script) {
-		t.Fatalf("compact request = %#v", requests[1])
+	if requests[1]["script"] != wantScript {
+		t.Fatalf("fallback request = %#v", requests[1])
 	}
-	if requests[2]["script"] != wantScript {
-		t.Fatalf("fallback request = %#v", requests[2])
+	if _, exists := requests[2]["script"]; exists {
+		t.Fatalf("registered script was uploaded again: %#v", requests[2])
 	}
 }
 
@@ -117,13 +126,15 @@ func TestAkamaiExplicitScriptIDUsesRemoteCacheFirst(t *testing.T) {
 	}
 }
 
-func TestIncapsulaScriptReuseAndFallback(t *testing.T) {
+func TestIncapsulaHashFirstAndFallback(t *testing.T) {
 	var mu sync.Mutex
 	var scripts []string
+	var ids []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Mode                       string     `json:"mode"`
 			Script                     string     `json:"script"`
+			ScriptID                   string     `json:"script_id"`
 			DocumentHTML               string     `json:"document_html"`
 			DocumentScriptSourceGroups [][]string `json:"document_script_source_groups"`
 		}
@@ -132,6 +143,7 @@ func TestIncapsulaScriptReuseAndFallback(t *testing.T) {
 		}
 		mu.Lock()
 		scripts = append(scripts, body.Script)
+		ids = append(ids, body.ScriptID)
 		call := len(scripts)
 		mu.Unlock()
 		if body.Mode != "reese84" {
@@ -140,7 +152,7 @@ func TestIncapsulaScriptReuseAndFallback(t *testing.T) {
 		if body.DocumentHTML == "" || len(body.DocumentScriptSourceGroups) != 1 || len(body.DocumentScriptSourceGroups[0]) != 1 {
 			t.Errorf("document context was not preserved")
 		}
-		if call == 2 {
+		if call == 1 {
 			w.WriteHeader(http.StatusConflict)
 			_, _ = io.WriteString(w, `{"error":"script_cache_miss"}`)
 			return
@@ -154,17 +166,23 @@ func TestIncapsulaScriptReuseAndFallback(t *testing.T) {
 		DocumentHTML:               `<script async src="/static/build"></script>`,
 		DocumentScriptSourceGroups: [][]string{{"https://example.com/static/build"}},
 	}
-	if _, err := client.Incapsula.Reese84(context.Background(), request); err != nil {
-		t.Fatal(err)
+	first, err := client.Incapsula.Reese84(context.Background(), request)
+	if err != nil || first.Response.Attempts != 2 || first.ScriptID != sha256Hex([]byte("raw script")) {
+		t.Fatalf("first = %#v, %v", first, err)
 	}
 	result, err := client.Incapsula.Reese84(context.Background(), request)
-	if err != nil || result.Response.Attempts != 2 {
+	if err != nil || result.Response.Attempts != 1 {
 		t.Fatalf("result/error = %#v/%v", result, err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(scripts) != 3 || scripts[0] != "raw script" || scripts[1] != "" || scripts[2] != "raw script" {
+	if len(scripts) != 3 || scripts[0] != "" || scripts[1] != "raw script" || scripts[2] != "" {
 		t.Fatalf("scripts = %#v", scripts)
+	}
+	for _, id := range ids {
+		if id != sha256Hex([]byte("raw script")) {
+			t.Fatalf("ids = %#v", ids)
+		}
 	}
 }
 
@@ -187,7 +205,7 @@ func TestTypedModesSendCanonicalContracts(t *testing.T) {
 				return err
 			},
 			assertBody: func(t *testing.T, body map[string]any) {
-				if body["script"] != base64.StdEncoding.EncodeToString([]byte("sbsd")) || body["sbsd_o"] != "cookie" {
+				if _, uploaded := body["script"]; uploaded || body["script_id"] != sha256Hex([]byte("sbsd")) || body["sbsd_o"] != "cookie" {
 					t.Fatalf("body = %#v", body)
 				}
 			},
@@ -231,7 +249,7 @@ func TestTypedModesSendCanonicalContracts(t *testing.T) {
 				return err
 			},
 			assertBody: func(t *testing.T, body map[string]any) {
-				if body["page_origin"] != "https://example.com" {
+				if _, uploaded := body["script"]; uploaded || body["script_id"] != sha256Hex([]byte("p.js")) || body["page_origin"] != "https://example.com" {
 					t.Fatalf("body = %#v", body)
 				}
 			},
